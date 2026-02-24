@@ -5,7 +5,8 @@ description = "CLI tool apply LiveKit noise cancellation to individual audio fil
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "livekit-agents~=1.2",
+    "livekit-agents~=1.4",
+    "livekit-plugins-ai-coustics>=0.2.0",
     "livekit-plugins-noise-cancellation~=0.2",
     "python-dotenv~=1.1",
     "rich>=14.0.0",

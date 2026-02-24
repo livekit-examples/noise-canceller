@@ -20,7 +20,8 @@ from rich.table import Table
 from rich import print as rprint
 
 from livekit import rtc, api
-from livekit.plugins import noise_cancellation
+from livekit.plugins import noise_cancellation, ai_coustics
+from livekit.plugins.ai_coustics import AICousticsAudioEnhancer, EnhancerModel
 from dotenv import load_dotenv
 
 SAMPLERATE = 48000
@@ -81,6 +82,8 @@ class AudioFileProcessor:
         self.room = None
         self.progress = None
         self.silent = silent
+        self._livekit_token = None
+        self._livekit_url = None
 
     async def process_file(self, input_path: Path, output_path: Path):
         """Process an audio file with LiveKit noise cancellation or WebRTC noise suppression"""
@@ -120,6 +123,28 @@ class AudioFileProcessor:
         with console.status("[bold blue]Connecting to LiveKit Cloud...", spinner="dots"):
             self.room = await self._connect_to_room()
         
+        # Provide credentials to ai-coustics filter so it can authenticate.
+        # A separate token with a different identity is required so the Enhancer
+        # can connect to the room without conflicting with our existing connection.
+        if isinstance(self.noise_filter, AICousticsAudioEnhancer):
+            aic_token = (
+                api.AccessToken()
+                .with_identity("noise-canceller-aic")
+                .with_name("Noise Canceller AIC")
+                .with_grants(
+                    api.VideoGrants(
+                        room_join=True,
+                        room="noise-canceller-room",
+                        agent=True,
+                    )
+                )
+                .to_jwt()
+            )
+            self.noise_filter._on_credentials_updated(
+                token=aic_token,
+                url=self._livekit_url,
+            )
+
         try:
             if self.use_webrtc:
                 # Process with WebRTC AudioProcessingModule
@@ -226,7 +251,15 @@ class AudioFileProcessor:
         # Show simple track publication info
         if not self.silent:
             await self._show_publication_info(publication)
-        
+
+        # Provide stream info to ai-coustics filter now that we have the publication SID
+        if isinstance(self.noise_filter, AICousticsAudioEnhancer):
+            self.noise_filter._on_stream_info_updated(
+                room_name=self.room.name or "noise-canceller-room",
+                participant_identity=self.room.local_participant.identity,
+                publication_sid=publication.sid,
+            )
+
         # Step 2: Create a stream that receives from the participant with noise cancellation
         logger.debug("Setting up noise-cancelled audio stream...")
         
@@ -517,6 +550,8 @@ class AudioFileProcessor:
             ),
         )
         logger.debug("Connected to LiveKit Cloud room for authentication / metering")
+        self._livekit_token = token
+        self._livekit_url = url
         return room
 
 
@@ -548,7 +583,7 @@ def setup_logging(log_level: str, silent: bool = False):
             show_level=True,
             show_path=False,
             rich_tracebacks=True,
-            tracebacks_suppress=[rtc, api, noise_cancellation]
+            tracebacks_suppress=[rtc, api, noise_cancellation, ai_coustics]
         )
         
         # Configure logging
@@ -569,6 +604,8 @@ async def main():
   uv run noise-canceller.py input.wav -o clean_audio.wav
   uv run noise-canceller.py song.flac --filter BVC
   uv run noise-canceller.py audio.m4a --filter WebRTC
+  uv run noise-canceller.py audio.m4a --filter aic-quail-l
+  uv run noise-canceller.py audio.m4a --filter aic-quail-vfl
   uv run noise-canceller.py audio.m4a -o processed.wav --silent
   
 📁 Supported formats: MP3, WAV, FLAC, OGG, M4A, AAC, AIFF, and more
@@ -595,9 +632,9 @@ async def main():
     )
     parser.add_argument(
         "--filter",
-        choices=["NC", "BVC", "BVCTelephony", "WebRTC"],
+        choices=["NC", "BVC", "BVCTelephony", "WebRTC", "aic-quail-l", "aic-quail-vfl"],
         default="NC",
-        help="Noise cancellation filter type (default: NC). WebRTC uses built-in WebRTC noise suppression."
+        help="Noise cancellation filter type (default: NC). WebRTC uses built-in WebRTC noise suppression. aic-quail-l and aic-quail-vfl use Ai-coustics enhancement models."
     )
     parser.add_argument(
         "--log-level",
@@ -666,7 +703,9 @@ async def main():
         filter_map = {
             "BVC": noise_cancellation.BVC(),
             "BVCTelephony": noise_cancellation.BVCTelephony(),
-            "NC": noise_cancellation.NC()
+            "NC": noise_cancellation.NC(),
+            "aic-quail-l": ai_coustics.audio_enhancement(model=EnhancerModel.QUAIL_L),
+            "aic-quail-vfl": ai_coustics.audio_enhancement(model=EnhancerModel.QUAIL_VF_L),
         }
         noise_filter = filter_map[args.filter]
     
