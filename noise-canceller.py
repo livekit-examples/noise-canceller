@@ -188,7 +188,7 @@ class AudioFileProcessor:
             # Create beautiful header panel
             display_name = _filter_display_name(self.filter_key)
             header = Panel.fit(
-                f"🎵 [bold cyan]Audio {display_name}[/bold cyan] 🎵\n"
+                f"🎵 [bold cyan]{display_name}[/bold cyan] 🎵\n"
                 f"[dim]Powered by LiveKit Cloud[/dim]",
                 style="cyan"
             )
