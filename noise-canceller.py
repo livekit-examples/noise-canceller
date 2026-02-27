@@ -126,7 +126,7 @@ async def entrypoint(ctx: JobContext):
         silent = _config["silent"]
         input_file = Path(_config["input_file"])
         ground_truth_file = _config.get("transcript")
-        stt_model = _config.get("stt_model", "deepgram/nova-3:en")
+        stt_model = _config.get("stt", "deepgram/nova-3:en")
         outputs: list[tuple[str, str]] = []  # (display_name, output_path)
         processors: list[AudioFileProcessor] = []
 
@@ -1123,7 +1123,7 @@ def main():
              "ground truth, and writes a Markdown report alongside each output."
     )
     parser.add_argument(
-        "--stt-model",
+        "--stt",
         type=str,
         default="deepgram/nova-3:en",
         help="LiveKit Inference STT model (default: deepgram/nova-3:en). "
@@ -1206,7 +1206,7 @@ def main():
         "filters": filter_configs,
         "silent": args.silent,
         "transcript": args.transcript,
-        "stt_model": args.stt_model,
+        "stt": args.stt,
     })
 
     # Replicate the agents CLI "connect" command: create a real room via the
