@@ -1344,12 +1344,27 @@ def main():
     parser.add_argument(
         "--direct",
         action="store_true",
-        help="Process audio directly through the FrameProcessor without going "
-        "through the LiveKit SFU. Avoids Opus encode/decode and produces "
-        "output identical to direct plugin FFI processing.",
+        help="Process audio directly through the plugin's FrameProcessor "
+        "without routing through the LiveKit SFU.  Bypasses Opus "
+        "encode/decode so output is bit-exact with direct FFI processing.  "
+        "Only compatible with ai-coustics filters (aic-quail-l, aic-quail-vfl).",
     )
 
     args = parser.parse_args()
+
+    # --direct is only meaningful for ai-coustics FrameProcessor filters.
+    _AIC_FILTERS = {"aic-quail-l", "aic-quail-vfl"}
+    if args.direct:
+        if args.filter == "all":
+            parser.error(
+                "--direct cannot be used with --filter all (it only supports "
+                "ai-coustics filters: aic-quail-l, aic-quail-vfl)"
+            )
+        if args.filter not in _AIC_FILTERS:
+            parser.error(
+                f"--direct is only supported with ai-coustics filters "
+                f"({', '.join(sorted(_AIC_FILTERS))}), not '{args.filter}'"
+            )
 
     # Setup console for silent mode
     if args.silent:
