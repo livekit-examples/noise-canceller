@@ -1243,6 +1243,12 @@ def main():
         help="LiveKit Inference STT model (default: deepgram/nova-3:en). "
         "Format: provider/model[:language]",
     )
+    parser.add_argument(
+        "--enhancement-level",
+        type=float,
+        help="Optional ai-coustics enhancement level (0.0-1.0). "
+        "Only applied to ai-coustics filters.",
+    )
 
     args = parser.parse_args()
 
@@ -1292,17 +1298,44 @@ def main():
                 )
             sys.exit(1)
 
+    # Validate enhancement level if provided
+    if args.enhancement_level is not None and not (0.0 <= args.enhancement_level <= 1.0):
+        if not args.silent:
+            console.print(
+                "❌ [red]--enhancement-level must be between 0.0 and 1.0[/red]"
+            )
+        else:
+            sys.stderr.write("ERROR: --enhancement-level must be between 0.0 and 1.0\n")
+        sys.exit(1)
+
+    def build_ai_coustics_filter(model: EnhancerModel):
+        kwargs = {"model": model}
+
+        # Forward enhancement-level only when requested and when the plugin
+        # version supports ModelParameter.ENHANCEMENT_LEVEL.
+        if args.enhancement_level is not None:
+            model_parameter = getattr(ai_coustics, "ModelParameter", None)
+            if model_parameter is not None and hasattr(
+                model_parameter, "ENHANCEMENT_LEVEL"
+            ):
+                kwargs["model_parameters"] = {
+                    model_parameter.ENHANCEMENT_LEVEL: args.enhancement_level
+                }
+            elif not args.silent:
+                console.print(
+                    "⚠️  [yellow]Ignoring --enhancement-level: installed ai-coustics "
+                    "plugin does not support ENHANCEMENT_LEVEL yet[/yellow]"
+                )
+
+        return ai_coustics.audio_enhancement(**kwargs)
+
     # Build filter config(s)
     filter_map = {
         "NC": lambda: noise_cancellation.NC(),
         "BVC": lambda: noise_cancellation.BVC(),
         "BVCTelephony": lambda: noise_cancellation.BVCTelephony(),
-        "aic-quail-l": lambda: ai_coustics.audio_enhancement(
-            model=EnhancerModel.QUAIL_L
-        ),
-        "aic-quail-vfl": lambda: ai_coustics.audio_enhancement(
-            model=EnhancerModel.QUAIL_VF_L
-        ),
+        "aic-quail-l": lambda: build_ai_coustics_filter(EnhancerModel.QUAIL_L),
+        "aic-quail-vfl": lambda: build_ai_coustics_filter(EnhancerModel.QUAIL_VF_L),
     }
     ALL_FILTERS = [
         "NC",
