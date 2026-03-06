@@ -1180,7 +1180,7 @@ def main():
   uv run noise-canceller.py song.flac --filter BVC
   uv run noise-canceller.py audio.m4a --filter WebRTC
   uv run noise-canceller.py audio.m4a --filter aic-quail-l
-  uv run noise-canceller.py audio.m4a --filter aic-quail-vfl
+  uv run noise-canceller.py audio.m4a --filter aic-quail-vfl --enhancement-level 0.8
   uv run noise-canceller.py audio.m4a --filter all
   uv run noise-canceller.py audio.m4a -o processed.wav --silent
   uv run noise-canceller.py input.wav -t ground_truth.txt
