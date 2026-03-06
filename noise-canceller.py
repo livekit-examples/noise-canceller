@@ -35,9 +35,8 @@ from livekit.plugins import noise_cancellation, ai_coustics
 from livekit.plugins.ai_coustics import EnhancerModel
 from dotenv import load_dotenv
 
-SAMPLERATE = 48000
+DEFAULT_SAMPLERATE = 48_000
 CHUNK_DURATION_MS = 10  # 10ms chunks
-SAMPLES_PER_CHUNK = int(SAMPLERATE * CHUNK_DURATION_MS / 1000)
 CHANNELS = 1
 
 load_dotenv()
@@ -189,6 +188,7 @@ async def entrypoint(ctx: JobContext):
                     use_webrtc=fc["use_webrtc"],
                     silent=silent,
                     direct=_config.get("direct", False),
+                    sample_rate=_config.get("sample_rate", DEFAULT_SAMPLERATE),
                 )
 
                 orig_stream: SttStream | None = None
@@ -338,6 +338,7 @@ class AudioFileProcessor:
         use_webrtc=False,
         silent=False,
         direct=False,
+        sample_rate: int = DEFAULT_SAMPLERATE,
     ):
         self.room = room
         self.noise_filter = noise_filter
@@ -347,6 +348,8 @@ class AudioFileProcessor:
         self.original_audio: np.ndarray | None = None
         self.silent = silent
         self.direct = direct
+        self.sample_rate = sample_rate
+        self.samples_per_chunk = int(sample_rate * CHUNK_DURATION_MS / 1000)
 
     async def process_file(
         self,
@@ -451,8 +454,8 @@ class AudioFileProcessor:
         processed_stt: "SttStream | None" = None,
     ):
         """Process audio data using WebRTC AudioProcessingModule"""
-        chunk_count = len(audio_data) // SAMPLES_PER_CHUNK
-        if len(audio_data) % SAMPLES_PER_CHUNK != 0:
+        chunk_count = len(audio_data) // self.samples_per_chunk
+        if len(audio_data) % self.samples_per_chunk != 0:
             chunk_count += 1
 
         if not self.silent:
@@ -492,21 +495,21 @@ class AudioFileProcessor:
                     prog.update(tid, total=chunk_count)
 
             for i in range(chunk_count):
-                start_idx = i * SAMPLES_PER_CHUNK
-                end_idx = min(start_idx + SAMPLES_PER_CHUNK, len(audio_data))
+                start_idx = i * self.samples_per_chunk
+                end_idx = min(start_idx + self.samples_per_chunk, len(audio_data))
                 chunk = audio_data[start_idx:end_idx]
 
-                if len(chunk) < SAMPLES_PER_CHUNK:
+                if len(chunk) < self.samples_per_chunk:
                     chunk = np.concatenate(
                         [
                             chunk,
-                            np.zeros(SAMPLES_PER_CHUNK - len(chunk), dtype=np.int16),
+                            np.zeros(self.samples_per_chunk - len(chunk), dtype=np.int16),
                         ]
                     )
 
                 audio_frame = rtc.AudioFrame(
                     data=chunk.tobytes(),
-                    sample_rate=SAMPLERATE,
+                    sample_rate=self.sample_rate,
                     num_channels=CHANNELS,
                     samples_per_channel=len(chunk),
                 )
@@ -521,9 +524,9 @@ class AudioFileProcessor:
                 if processed_stt is not None:
                     processed_frame = rtc.AudioFrame(
                         data=processed_bytes,
-                        sample_rate=SAMPLERATE,
+                        sample_rate=self.sample_rate,
                         num_channels=CHANNELS,
-                        samples_per_channel=SAMPLES_PER_CHUNK,
+                        samples_per_channel=self.samples_per_chunk,
                     )
                     processed_stt.push_frame(processed_frame)
 
@@ -550,8 +553,8 @@ class AudioFileProcessor:
         This avoids Opus encode/decode and produces output identical to direct
         plugin FFI processing.  Useful for bit-exact comparison testing.
         """
-        chunk_count = len(audio_data) // SAMPLES_PER_CHUNK
-        if len(audio_data) % SAMPLES_PER_CHUNK != 0:
+        chunk_count = len(audio_data) // self.samples_per_chunk
+        if len(audio_data) % self.samples_per_chunk != 0:
             chunk_count += 1
 
         # Set up credentials on the FrameProcessor so the underlying Enhancer
@@ -599,21 +602,21 @@ class AudioFileProcessor:
                     prog.update(tid, total=chunk_count)
 
             for i in range(chunk_count):
-                start_idx = i * SAMPLES_PER_CHUNK
-                end_idx = min(start_idx + SAMPLES_PER_CHUNK, len(audio_data))
+                start_idx = i * self.samples_per_chunk
+                end_idx = min(start_idx + self.samples_per_chunk, len(audio_data))
                 chunk = audio_data[start_idx:end_idx]
 
-                if len(chunk) < SAMPLES_PER_CHUNK:
+                if len(chunk) < self.samples_per_chunk:
                     chunk = np.concatenate(
                         [
                             chunk,
-                            np.zeros(SAMPLES_PER_CHUNK - len(chunk), dtype=np.int16),
+                            np.zeros(self.samples_per_chunk - len(chunk), dtype=np.int16),
                         ]
                     )
 
                 audio_frame = rtc.AudioFrame(
                     data=chunk.tobytes(),
-                    sample_rate=SAMPLERATE,
+                    sample_rate=self.sample_rate,
                     num_channels=CHANNELS,
                     samples_per_channel=len(chunk),
                 )
@@ -648,8 +651,8 @@ class AudioFileProcessor:
                                                                           |
                                                                   CapturingAudioInput
         """
-        chunk_count = len(audio_data) // SAMPLES_PER_CHUNK
-        if len(audio_data) % SAMPLES_PER_CHUNK != 0:
+        chunk_count = len(audio_data) // self.samples_per_chunk
+        if len(audio_data) % self.samples_per_chunk != 0:
             chunk_count += 1
 
         publisher_room: rtc.Room | None = None
@@ -670,7 +673,7 @@ class AudioFileProcessor:
             await publisher_room.connect(os.environ["LIVEKIT_URL"], publisher_token)
             logger.debug("Publisher connected to room %s", self.room.name)
 
-            file_source = FileAudioSource(audio_data, SAMPLERATE, CHANNELS)
+            file_source = FileAudioSource(audio_data, self.sample_rate, CHANNELS)
             input_track = rtc.LocalAudioTrack.create_audio_track(
                 "raw-input", file_source
             )
@@ -699,7 +702,7 @@ class AudioFileProcessor:
                 room_options=room_io.RoomOptions(
                     audio_input=room_io.AudioInputOptions(
                         noise_cancellation=self.noise_filter,
-                        sample_rate=SAMPLERATE,
+                        sample_rate=self.sample_rate,
                         num_channels=CHANNELS,
                         frame_size_ms=CHUNK_DURATION_MS,
                     ),
@@ -816,23 +819,23 @@ class AudioFileProcessor:
     ):
         """Feed audio data to the source with precise timing and progress updates."""
         ids = task_ids if isinstance(task_ids, list) else [task_ids]
-        chunk_duration = SAMPLES_PER_CHUNK / SAMPLERATE
+        chunk_duration = self.samples_per_chunk / self.sample_rate
         loop = asyncio.get_running_loop()
         start_time = loop.time()
 
         for i in range(chunk_count):
-            start_idx = i * SAMPLES_PER_CHUNK
-            end_idx = min(start_idx + SAMPLES_PER_CHUNK, len(audio_data))
+            start_idx = i * self.samples_per_chunk
+            end_idx = min(start_idx + self.samples_per_chunk, len(audio_data))
             chunk = audio_data[start_idx:end_idx]
 
-            if len(chunk) < SAMPLES_PER_CHUNK:
+            if len(chunk) < self.samples_per_chunk:
                 chunk = np.concatenate(
-                    [chunk, np.zeros(SAMPLES_PER_CHUNK - len(chunk), dtype=np.int16)]
+                    [chunk, np.zeros(self.samples_per_chunk - len(chunk), dtype=np.int16)]
                 )
 
             audio_frame = rtc.AudioFrame(
                 data=chunk.tobytes(),
-                sample_rate=SAMPLERATE,
+                sample_rate=self.sample_rate,
                 num_channels=CHANNELS,
                 samples_per_channel=len(chunk),
             )
@@ -885,11 +888,11 @@ class AudioFileProcessor:
             audio_array = audio_data
 
             # Resample to 48kHz mono if needed
-            if sample_rate != SAMPLERATE or channels != CHANNELS:
+            if sample_rate != self.sample_rate or channels != CHANNELS:
                 audio_array = self._resample_audio(audio_array, sample_rate, channels)
                 if not self.silent:
                     console.print(
-                        f"🔄 [yellow]Resampled to: {SAMPLERATE}Hz, {CHANNELS} channel(s)[/yellow]"
+                        f"🔄 [yellow]Resampled to: {self.sample_rate}Hz, {CHANNELS} channel(s)[/yellow]"
                     )
                     console.print()
 
@@ -920,10 +923,10 @@ class AudioFileProcessor:
                 audio_array = stereo.mean(axis=1).astype(np.int16)
 
         # Resample if needed
-        if original_rate != SAMPLERATE:
+        if original_rate != self.sample_rate:
             resampler = rtc.AudioResampler(
                 input_rate=original_rate,
-                output_rate=SAMPLERATE,
+                output_rate=self.sample_rate,
                 num_channels=1,
                 quality=rtc.AudioResamplerQuality.VERY_HIGH,
             )
@@ -961,7 +964,7 @@ class AudioFileProcessor:
         with wave.open(str(output_path), "wb") as wav_file:
             wav_file.setnchannels(CHANNELS)
             wav_file.setsampwidth(2)  # 16-bit
-            wav_file.setframerate(SAMPLERATE)
+            wav_file.setframerate(self.sample_rate)
 
             for frame_data in self.processed_frames:
                 wav_file.writeframes(frame_data)
@@ -970,7 +973,7 @@ class AudioFileProcessor:
 class FileAudioSource(rtc.AudioSource):
     """Custom audio source that streams from file data"""
 
-    def __init__(self, audio_data, sample_rate=SAMPLERATE, num_channels=CHANNELS):
+    def __init__(self, audio_data, sample_rate=DEFAULT_SAMPLERATE, num_channels=CHANNELS):
         super().__init__(sample_rate, num_channels)
         self.audio_data = audio_data
 
@@ -1342,6 +1345,13 @@ def main():
         "Format: provider/model[:language]",
     )
     parser.add_argument(
+        "--sample-rate",
+        type=int,
+        default=DEFAULT_SAMPLERATE,
+        help=f"Output sample rate in Hz (default: {DEFAULT_SAMPLERATE}). "
+        "Input audio is resampled to this rate before processing.",
+    )
+    parser.add_argument(
         "--direct",
         action="store_true",
         help="Process audio directly through the plugin's FrameProcessor "
@@ -1460,6 +1470,7 @@ def main():
             "transcript": args.transcript,
             "stt": args.stt,
             "direct": args.direct,
+            "sample_rate": args.sample_rate,
         }
     )
 
