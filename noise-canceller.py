@@ -188,6 +188,7 @@ async def entrypoint(ctx: JobContext):
                     filter_key=fc["filter"],
                     use_webrtc=fc["use_webrtc"],
                     silent=silent,
+                    direct=_config.get("direct", False),
                 )
 
                 orig_stream: SttStream | None = None
@@ -336,6 +337,7 @@ class AudioFileProcessor:
         filter_key: str,
         use_webrtc=False,
         silent=False,
+        direct=False,
     ):
         self.room = room
         self.noise_filter = noise_filter
@@ -344,6 +346,7 @@ class AudioFileProcessor:
         self.processed_frames: list[bytes] = []
         self.original_audio: np.ndarray | None = None
         self.silent = silent
+        self.direct = direct
 
     async def process_file(
         self,
@@ -415,6 +418,12 @@ class AudioFileProcessor:
                 bar_ids=bar_ids,
                 original_stt=original_stt,
                 processed_stt=processed_stt,
+            )
+        elif self.direct:
+            await self._process_direct(
+                audio_data,
+                progress=progress,
+                bar_ids=bar_ids,
             )
         else:
             await self._process_with_noise_cancellation(
@@ -529,6 +538,95 @@ class AudioFileProcessor:
             logger.info(
                 f"Successfully processed {len(self.processed_frames)} frames with WebRTC APM"
             )
+
+    async def _process_direct(
+        self,
+        audio_data,
+        progress=None,
+        bar_ids: dict[str, int] | None = None,
+    ):
+        """Process audio directly through the FrameProcessor, bypassing the SFU.
+
+        This avoids Opus encode/decode and produces output identical to direct
+        plugin FFI processing.  Useful for bit-exact comparison testing.
+        """
+        chunk_count = len(audio_data) // SAMPLES_PER_CHUNK
+        if len(audio_data) % SAMPLES_PER_CHUNK != 0:
+            chunk_count += 1
+
+        # Set up credentials on the FrameProcessor so the underlying Enhancer
+        # can authenticate with the ai-coustics service.
+        token = (
+            api.AccessToken(
+                os.environ["LIVEKIT_API_KEY"],
+                os.environ["LIVEKIT_API_SECRET"],
+            )
+            .with_identity("noise-canceller-direct")
+            .with_grants(api.VideoGrants(room_join=True, room=self.room.name))
+            .to_jwt()
+        )
+        self.noise_filter._on_credentials_updated(
+            token=token, url=os.environ["LIVEKIT_URL"]
+        )
+        self.noise_filter._on_stream_info_updated(
+            room_name=self.room.name,
+            participant_identity="direct-processing",
+            publication_sid="direct-sid",
+        )
+
+        if progress is None:
+            progress_class = NullProgress if self.silent else Progress
+            ctx = progress_class(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeElapsedColumn(),
+                console=console,
+            )
+        else:
+            ctx = nullcontext(progress)
+
+        ids = bar_ids or {}
+
+        with ctx as prog:
+            if not ids:
+                ids["nc"] = prog.add_task(
+                    "  🎤 Processing directly (no SFU)", total=chunk_count
+                )
+            else:
+                for tid in ids.values():
+                    prog.update(tid, total=chunk_count)
+
+            for i in range(chunk_count):
+                start_idx = i * SAMPLES_PER_CHUNK
+                end_idx = min(start_idx + SAMPLES_PER_CHUNK, len(audio_data))
+                chunk = audio_data[start_idx:end_idx]
+
+                if len(chunk) < SAMPLES_PER_CHUNK:
+                    chunk = np.concatenate(
+                        [
+                            chunk,
+                            np.zeros(SAMPLES_PER_CHUNK - len(chunk), dtype=np.int16),
+                        ]
+                    )
+
+                audio_frame = rtc.AudioFrame(
+                    data=chunk.tobytes(),
+                    sample_rate=SAMPLERATE,
+                    num_channels=CHANNELS,
+                    samples_per_channel=len(chunk),
+                )
+
+                processed_frame = self.noise_filter._process(audio_frame)
+                self.processed_frames.append(processed_frame.data)
+
+                for tid in ids.values():
+                    prog.update(tid, advance=1)
+
+        logger.info(
+            "Direct processing: %d frames processed", len(self.processed_frames)
+        )
 
     async def _process_with_noise_cancellation(
         self,
@@ -1243,6 +1341,13 @@ def main():
         help="LiveKit Inference STT model (default: deepgram/nova-3:en). "
         "Format: provider/model[:language]",
     )
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="Process audio directly through the FrameProcessor without going "
+        "through the LiveKit SFU. Avoids Opus encode/decode and produces "
+        "output identical to direct plugin FFI processing.",
+    )
 
     args = parser.parse_args()
 
@@ -1339,6 +1444,7 @@ def main():
             "silent": args.silent,
             "transcript": args.transcript,
             "stt": args.stt,
+            "direct": args.direct,
         }
     )
 
