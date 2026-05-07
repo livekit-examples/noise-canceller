@@ -51,6 +51,7 @@ uv run noise-canceller.py input.mp3 --filter all
 - **BVCTelephony**: BVC optimized for telephony applications
 - **aic-quail-l**: Ai-Coustics QUAIL-L speech enhancement
 - **aic-quail-vfl**: Ai-Coustics QUAIL-VF-L speech enhancement
+- **aic-quail-vfs**: Ai-Coustics QUAIL-VF-S speech enhancement
 - **WebRTC**: For comparison purposes, apply WebRTC built-in `noise_suppression` to the audio
 
 ### Transcription & WER Analysis

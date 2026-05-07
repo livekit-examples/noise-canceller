@@ -314,6 +314,7 @@ def _filter_display_name(filter_key: str) -> str:
         "WebRTC": "WebRTC Noise Suppression",
         "aic-quail-l": "Ai-Coustics QUAIL-L",
         "aic-quail-vfl": "Ai-Coustics QUAIL-VF-L",
+        "aic-quail-vfs": "Ai-Coustics QUAIL-VF-S",
     }.get(filter_key, filter_key)
 
 
@@ -326,6 +327,7 @@ def _filter_short_name(filter_key: str) -> str:
         "WebRTC": "WebRTC",
         "aic-quail-l": "aic-quail-l",
         "aic-quail-vfl": "aic-quail-vfl",
+        "aic-quail-vfs": "aic-quail-vfs",
     }.get(filter_key, filter_key)
 
 
@@ -1315,6 +1317,7 @@ def main():
             "WebRTC",
             "aic-quail-l",
             "aic-quail-vfl",
+            "aic-quail-vfs",
             "all",
         ],
         default="NC",
@@ -1363,18 +1366,18 @@ def main():
         help="Process audio directly through the plugin's FrameProcessor "
         "without routing through the LiveKit SFU.  Bypasses Opus "
         "encode/decode so output is bit-exact with direct FFI processing.  "
-        "Only compatible with ai-coustics filters (aic-quail-l, aic-quail-vfl).",
+        "Only compatible with ai-coustics filters (aic-quail-l, aic-quail-vfl, aic-quail-vfs).",
     )
 
     args = parser.parse_args()
 
     # --direct is only meaningful for ai-coustics FrameProcessor filters.
-    _AIC_FILTERS = {"aic-quail-l", "aic-quail-vfl"}
+    _AIC_FILTERS = {"aic-quail-l", "aic-quail-vfl", "aic-quail-vfs"}
     if args.direct:
         if args.filter == "all":
             parser.error(
                 "--direct cannot be used with --filter all (it only supports "
-                "ai-coustics filters: aic-quail-l, aic-quail-vfl)"
+                "ai-coustics filters: aic-quail-l, aic-quail-vfl, aic-quail-vfs)"
             )
         if args.filter not in _AIC_FILTERS:
             parser.error(
@@ -1464,6 +1467,7 @@ def main():
         "BVCTelephony": lambda: noise_cancellation.BVCTelephony(),
         "aic-quail-l": lambda: build_ai_coustics_filter(EnhancerModel.QUAIL_L),
         "aic-quail-vfl": lambda: build_ai_coustics_filter(EnhancerModel.QUAIL_VF_L),
+        "aic-quail-vfs": lambda: build_ai_coustics_filter(EnhancerModel.QUAIL_VF_S),
     }
     ALL_FILTERS = [
         "NC",
@@ -1472,6 +1476,7 @@ def main():
         "WebRTC",
         "aic-quail-l",
         "aic-quail-vfl",
+        "aic-quail-vfs",
     ]
     selected = ALL_FILTERS if args.filter == "all" else [args.filter]
 
