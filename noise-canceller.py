@@ -31,7 +31,7 @@ from livekit.agents import AgentServer, AutoSubscribe, JobContext, inference
 from livekit.agents.job import JobExecutorType
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.voice import AgentSession, Agent, room_io, io as voice_io
-from livekit.plugins import noise_cancellation, ai_coustics
+from livekit.plugins import noise_cancellation, ai_coustics, krisp
 from livekit.plugins.ai_coustics import EnhancerModel
 from dotenv import load_dotenv
 
@@ -308,13 +308,15 @@ async def entrypoint(ctx: JobContext):
 def _filter_display_name(filter_key: str) -> str:
     """Human-readable name for a --filter value."""
     return {
+        "aic-quail-l": "Ai-Coustics QUAIL-L",
+        "aic-quail-vfl": "Ai-Coustics QUAIL-VF-L",
+        "aic-quail-vfs": "Ai-Coustics QUAIL-VF-S",
+        "viva-voice-isolation": "Krisp Viva Voice Isolation",
+        "viva-voice-isolation-telephony": "Krisp Viva Noise Cancellation",
         "NC": "Krisp Noise Cancellation",
         "BVC": "Krisp Background Voice Cancellation",
         "BVCTelephony": "Krisp BVC (Telephony)",
         "WebRTC": "WebRTC Noise Suppression",
-        "aic-quail-l": "Ai-Coustics QUAIL-L",
-        "aic-quail-vfl": "Ai-Coustics QUAIL-VF-L",
-        "aic-quail-vfs": "Ai-Coustics QUAIL-VF-S",
     }.get(filter_key, filter_key)
 
 
@@ -328,6 +330,8 @@ def _filter_short_name(filter_key: str) -> str:
         "aic-quail-l": "aic-quail-l",
         "aic-quail-vfl": "aic-quail-vfl",
         "aic-quail-vfs": "aic-quail-vfs",
+        "viva-voice-isolation": "Krisp VI",
+        "viva-voice-isolation-telephony": "Krisp VI-Tel",
     }.get(filter_key, filter_key)
 
 
@@ -505,7 +509,9 @@ class AudioFileProcessor:
                     chunk = np.concatenate(
                         [
                             chunk,
-                            np.zeros(self.samples_per_chunk - len(chunk), dtype=np.int16),
+                            np.zeros(
+                                self.samples_per_chunk - len(chunk), dtype=np.int16
+                            ),
                         ]
                     )
 
@@ -612,7 +618,9 @@ class AudioFileProcessor:
                     chunk = np.concatenate(
                         [
                             chunk,
-                            np.zeros(self.samples_per_chunk - len(chunk), dtype=np.int16),
+                            np.zeros(
+                                self.samples_per_chunk - len(chunk), dtype=np.int16
+                            ),
                         ]
                     )
 
@@ -832,7 +840,10 @@ class AudioFileProcessor:
 
             if len(chunk) < self.samples_per_chunk:
                 chunk = np.concatenate(
-                    [chunk, np.zeros(self.samples_per_chunk - len(chunk), dtype=np.int16)]
+                    [
+                        chunk,
+                        np.zeros(self.samples_per_chunk - len(chunk), dtype=np.int16),
+                    ]
                 )
 
             audio_frame = rtc.AudioFrame(
@@ -975,7 +986,9 @@ class AudioFileProcessor:
 class FileAudioSource(rtc.AudioSource):
     """Custom audio source that streams from file data"""
 
-    def __init__(self, audio_data, sample_rate=DEFAULT_SAMPLERATE, num_channels=CHANNELS):
+    def __init__(
+        self, audio_data, sample_rate=DEFAULT_SAMPLERATE, num_channels=CHANNELS
+    ):
         super().__init__(sample_rate, num_channels)
         self.audio_data = audio_data
 
@@ -1318,6 +1331,8 @@ def main():
             "aic-quail-l",
             "aic-quail-vfl",
             "aic-quail-vfs",
+            "viva-voice-isolation",
+            "viva-voice-isolation-telephony",
             "all",
         ],
         default="NC",
@@ -1432,7 +1447,9 @@ def main():
             sys.exit(1)
 
     # Validate enhancement level if provided
-    if args.ai_coustics_enhancement_level is not None and not (0.0 <= args.ai_coustics_enhancement_level <= 1.0):
+    if args.ai_coustics_enhancement_level is not None and not (
+        0.0 <= args.ai_coustics_enhancement_level <= 1.0
+    ):
         if not args.silent:
             console.print(
                 "❌ [red]--enhancement-level must be between 0.0 and 1.0[/red]"
@@ -1468,6 +1485,8 @@ def main():
         "aic-quail-l": lambda: build_ai_coustics_filter(EnhancerModel.QUAIL_L),
         "aic-quail-vfl": lambda: build_ai_coustics_filter(EnhancerModel.QUAIL_VF_L),
         "aic-quail-vfs": lambda: build_ai_coustics_filter(EnhancerModel.QUAIL_VF_S),
+        "viva-voice-isolation": lambda: krisp.voice_isolation(),
+        "viva-voice-isolation-telephony": lambda: krisp.voice_isolation_telephony(),
     }
     ALL_FILTERS = [
         "NC",
@@ -1477,6 +1496,8 @@ def main():
         "aic-quail-l",
         "aic-quail-vfl",
         "aic-quail-vfs",
+        "viva-voice-isolation",
+        "viva-voice-isolation-telephony",
     ]
     selected = ALL_FILTERS if args.filter == "all" else [args.filter]
 
