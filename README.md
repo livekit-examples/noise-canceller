@@ -51,7 +51,7 @@ uv run noise-canceller.py input.mp3 --filter all
 - **aic-quail-vfl**: Ai-Coustics QUAIL-VF-L speech enhancement
 - **aic-quail-vfs**: Ai-Coustics QUAIL-VF-S speech enhancement
 - **viva-voice-isolation**: Krisp Viva in voice isolation mode
-- **viva-noise-isolation-telephony**: Krisp Viva in voice cancellation mode optimized for telephony applications
+- **viva-voice-isolation-telephony**: Krisp Viva in voice cancellation mode optimized for telephony applications
 - **BVC**: Background voice cancellation (removes background voices + noise)
 - **BVCTelephony**: BVC optimized for telephony applications
 - **WebRTC**: For comparison purposes, apply WebRTC built-in `noise_suppression` to the audio
