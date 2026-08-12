@@ -11,7 +11,7 @@ dependencies = [
     "python-dotenv~=1.1",
     "rich>=14.0.0",
     "soundfile~=0.13",
-    "livekit-plugins-krisp>=0.2.7",
+    "livekit-plugins-krisp>=0.2.8",
 ]
 
 
