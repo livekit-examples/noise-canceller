@@ -312,7 +312,7 @@ def _filter_display_name(filter_key: str) -> str:
         "aic-quail-vfl": "Ai-Coustics QUAIL-VF-L",
         "aic-quail-vfs": "Ai-Coustics QUAIL-VF-S",
         "viva-voice-isolation": "Krisp Viva Voice Isolation",
-        "viva-voice-isolation-telephony": "Krisp Viva Noise Cancellation",
+        "viva-voice-isolation-telephony": "Krisp Viva Voice Isolation (Telephony)",
         "NC": "Krisp Noise Cancellation",
         "BVC": "Krisp Background Voice Cancellation",
         "BVCTelephony": "Krisp BVC (Telephony)",
