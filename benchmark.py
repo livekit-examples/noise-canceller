@@ -17,11 +17,12 @@ Both datasets are CC BY-NC 4.0, fetched from Hugging Face at run time and
 never committed to this repo.
 
 Usage:
-    uv run --group benchmark benchmark.py fetch voice-focus-examples
-    uv run --group benchmark benchmark.py fetch dawn-chorus-en
     uv run benchmark.py run --suite dawn-chorus-en \
         --filters aic-quail-l,aic-quail-vfl,aic-quail-vfs --jobs 4
     uv run benchmark.py report benchmark_results/dawn-chorus-en/results.jsonl
+
+`run` fetches the suite from Hugging Face automatically on first use; the
+`fetch` subcommand exists only to pre-download.
 
 `run` shells out to noise-canceller.py per clip, so each job consumes
 LiveKit Cloud connection minutes and processes in real time — use --jobs to
@@ -122,10 +123,20 @@ async def cmd_run(args: argparse.Namespace) -> None:
     data_dir = DATA_DIR / args.suite
     clips = sorted(data_dir.glob("*.wav"))
     if not clips:
-        sys.exit(
-            f"no clips in {data_dir} — run "
-            f"`uv run --group benchmark benchmark.py fetch {args.suite}` first"
+        # First run: fetch the suite automatically. The subprocess pulls in
+        # the 'benchmark' dependency group so this venv stays light.
+        print(f"{args.suite}: no local data, fetching from Hugging Face...")
+        proc = await asyncio.create_subprocess_exec(
+            "uv", "run", "--group", "benchmark",
+            "benchmark.py", "fetch", args.suite,
+            cwd=ROOT,
         )
+        await proc.communicate()
+        if proc.returncode != 0:
+            sys.exit(f"fetch failed (exit {proc.returncode})")
+        clips = sorted(data_dir.glob("*.wav"))
+        if not clips:
+            sys.exit(f"fetch produced no clips in {data_dir}")
     if args.limit:
         clips = clips[: args.limit]
 

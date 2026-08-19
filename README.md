@@ -100,14 +100,12 @@ The suites are reported separately on purpose: averaging a 10-clip demo set
 into a 450-clip benchmark would skew the distribution.
 
 ```bash
-# 1. Download a suite (needs the 'benchmark' dependency group)
-uv run --group benchmark benchmark.py fetch dawn-chorus-en
-
-# 2. Run filters over it (resumable; skips already-scored clips)
+# 1. Run filters over a suite (fetches the dataset automatically on first
+#    use; resumable, skips already-scored clips)
 uv run benchmark.py run --suite dawn-chorus-en \
     --filters aic-quail-l,aic-quail-vfl,aic-quail-vfs --jobs 4
 
-# 3. Aggregate into a Markdown report
+# 2. Aggregate into a Markdown report
 uv run benchmark.py report benchmark_results/dawn-chorus-en/results.jsonl
 ```
 
