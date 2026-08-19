@@ -80,8 +80,11 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     split = dataset[next(iter(dataset))]
     audio_column = suite["audio_column"]
     # decode=False keeps the raw bytes; soundfile decodes them without
-    # needing torchcodec.
-    split = split.cast_column(audio_column, Audio(decode=False))
+    # needing torchcodec. Cast every audio column (dawn-chorus-en also has
+    # a clean 'speech' reference we don't use).
+    for name, feature in split.features.items():
+        if isinstance(feature, Audio):
+            split = split.cast_column(name, Audio(decode=False))
     print(f"{args.suite}: {len(split)} clips, columns: {split.column_names}")
 
     with open(out_dir / "manifest.jsonl", "w") as manifest:
