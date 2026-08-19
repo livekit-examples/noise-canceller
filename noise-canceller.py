@@ -2,9 +2,9 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import os
-import re
 import sys
 import wave
 from contextlib import nullcontext
@@ -35,9 +35,23 @@ from livekit.plugins import noise_cancellation, ai_coustics, krisp
 from livekit.plugins.ai_coustics import EnhancerModel
 from dotenv import load_dotenv
 
+from wer import generate_transcript_report, score_transcript
+
 DEFAULT_SAMPLERATE = 48_000
 CHUNK_DURATION_MS = 10  # 10ms chunks
 CHANNELS = 1
+
+ALL_FILTERS = [
+    "NC",
+    "BVC",
+    "BVCTelephony",
+    "WebRTC",
+    "aic-quail-l",
+    "aic-quail-vfl",
+    "aic-quail-vfs",
+    "viva-voice-isolation",
+    "viva-voice-isolation-telephony",
+]
 
 load_dotenv()
 
@@ -241,39 +255,13 @@ async def entrypoint(ctx: JobContext):
                 for _fc, ps in processed_stt_streams:
                     await ps.result()
 
-        # ----- Results -----
-        if not silent:
-            result_lines: list[str] = []
-            for filter_name, path in outputs:
-                result_lines.append(f"  [dim]{filter_name}:[/dim] [cyan]{path}[/cyan]")
-
-            if ground_truth_file and original_stt_stream is not None:
-                ground_truth = Path(ground_truth_file).read_text().strip()
-                input_transcript = await original_stt_stream.result()
-
-                for fc, proc_stream in processed_stt_streams:
-                    output_transcript = await proc_stream.result()
-                    report = generate_transcript_report(
-                        ground_truth=ground_truth,
-                        input_transcript=input_transcript,
-                        output_transcript=output_transcript,
-                        input_file=str(input_file),
-                        output_file=fc["output"],
-                        filter_name=_filter_display_name(fc["filter"]),
-                        stt_model=stt_model,
-                    )
-                    report_path = Path(fc["output"]).with_suffix(".transcript.md")
-                    report_path.write_text(report)
-                    result_lines.append(
-                        f"  [dim]Transcript:[/dim] [cyan]{report_path}[/cyan]"
-                    )
-
-            body = "🎉 [bold green]All Done![/bold green]\n" + "\n".join(result_lines)
-            console.print()
-            console.print(Panel.fit(body, style="green"))
-        elif ground_truth_file and original_stt_stream is not None:
+        # ----- Reports -----
+        report_paths: list[str] = []
+        if ground_truth_file and original_stt_stream is not None:
             ground_truth = Path(ground_truth_file).read_text().strip()
             input_transcript = await original_stt_stream.result()
+            original_scores = score_transcript(ground_truth, input_transcript)
+
             for fc, proc_stream in processed_stt_streams:
                 output_transcript = await proc_stream.result()
                 report = generate_transcript_report(
@@ -287,6 +275,35 @@ async def entrypoint(ctx: JobContext):
                 )
                 report_path = Path(fc["output"]).with_suffix(".transcript.md")
                 report_path.write_text(report)
+                report_paths.append(str(report_path))
+
+                if _config.get("json"):
+                    metrics = {
+                        "input_file": str(input_file),
+                        "output_file": fc["output"],
+                        "filter": fc["filter"],
+                        "stt_model": stt_model,
+                        "sample_rate": _config.get("sample_rate", DEFAULT_SAMPLERATE),
+                        "direct": _config.get("direct", False),
+                        "original": original_scores,
+                        "processed": score_transcript(ground_truth, output_transcript),
+                    }
+                    json_path = Path(fc["output"]).with_suffix(".metrics.json")
+                    json_path.write_text(json.dumps(metrics, indent=2))
+
+        # ----- Results -----
+        if not silent:
+            result_lines: list[str] = []
+            for filter_name, path in outputs:
+                result_lines.append(f"  [dim]{filter_name}:[/dim] [cyan]{path}[/cyan]")
+            for report_path in report_paths:
+                result_lines.append(
+                    f"  [dim]Transcript:[/dim] [cyan]{report_path}[/cyan]"
+                )
+
+            body = "🎉 [bold green]All Done![/bold green]\n" + "\n".join(result_lines)
+            console.print()
+            console.print(Panel.fit(body, style="green"))
 
     except Exception as e:
         exit_code = 1
@@ -433,6 +450,8 @@ class AudioFileProcessor:
                 audio_data,
                 progress=progress,
                 bar_ids=bar_ids,
+                original_stt=original_stt,
+                processed_stt=processed_stt,
             )
         else:
             await self._process_with_noise_cancellation(
@@ -555,11 +574,16 @@ class AudioFileProcessor:
         audio_data,
         progress=None,
         bar_ids: dict[str, int] | None = None,
+        original_stt: "SttStream | None" = None,
+        processed_stt: "SttStream | None" = None,
     ):
         """Process audio directly through the FrameProcessor, bypassing the SFU.
 
         This avoids Opus encode/decode and produces output identical to direct
         plugin FFI processing.  Useful for bit-exact comparison testing.
+
+        Runs faster than real time: frames are processed (and pushed to the
+        STT streams) as fast as the enhancer can consume them.
         """
         chunk_count = len(audio_data) // self.samples_per_chunk
         if len(audio_data) % self.samples_per_chunk != 0:
@@ -631,11 +655,26 @@ class AudioFileProcessor:
                     samples_per_channel=len(chunk),
                 )
 
+                if original_stt is not None:
+                    original_stt.push_frame(audio_frame)
+
                 processed_frame = self.noise_filter._process(audio_frame)
                 self.processed_frames.append(processed_frame.data)
 
+                if processed_stt is not None:
+                    processed_stt.push_frame(processed_frame)
+
                 for tid in ids.values():
                     prog.update(tid, advance=1)
+
+                # Yield to the event loop so the STT collect tasks can run.
+                if i % 100 == 0:
+                    await asyncio.sleep(0)
+
+            if original_stt is not None:
+                original_stt.end_input()
+            if processed_stt is not None:
+                processed_stt.end_input()
 
         logger.info(
             "Direct processing: %d frames processed", len(self.processed_frames)
@@ -1070,177 +1109,6 @@ class SttStream:
             self.done = True
 
 
-def _normalize_word(word: str) -> str:
-    """Lowercase and strip non-alphanumeric characters for comparison."""
-    return re.sub(r"[^\w]", "", word.lower())
-
-
-def compute_word_alignment(
-    reference: str,
-    hypothesis: str,
-) -> list[tuple[str, str | None, str | None]]:
-    """Word-level alignment via minimum edit distance.
-
-    Returns [(operation, ref_word, hyp_word), ...] where *operation* is one of
-    ``'correct'``, ``'substitution'``, ``'insertion'``, or ``'deletion'``.
-    """
-    ref_words = reference.split()
-    hyp_words = hypothesis.split()
-    n, m = len(ref_words), len(hyp_words)
-
-    dp = [[0] * (m + 1) for _ in range(n + 1)]
-    for i in range(n + 1):
-        dp[i][0] = i
-    for j in range(m + 1):
-        dp[0][j] = j
-
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            if _normalize_word(ref_words[i - 1]) == _normalize_word(hyp_words[j - 1]):
-                dp[i][j] = dp[i - 1][j - 1]
-            else:
-                dp[i][j] = 1 + min(
-                    dp[i - 1][j - 1],  # substitution
-                    dp[i][j - 1],  # insertion
-                    dp[i - 1][j],  # deletion
-                )
-
-    # Backtrace
-    alignment: list[tuple[str, str | None, str | None]] = []
-    i, j = n, m
-    while i > 0 or j > 0:
-        if (
-            i > 0
-            and j > 0
-            and _normalize_word(ref_words[i - 1]) == _normalize_word(hyp_words[j - 1])
-        ):
-            alignment.append(("correct", ref_words[i - 1], hyp_words[j - 1]))
-            i -= 1
-            j -= 1
-        elif i > 0 and j > 0 and dp[i][j] == dp[i - 1][j - 1] + 1:
-            alignment.append(("substitution", ref_words[i - 1], hyp_words[j - 1]))
-            i -= 1
-            j -= 1
-        elif j > 0 and dp[i][j] == dp[i][j - 1] + 1:
-            alignment.append(("insertion", None, hyp_words[j - 1]))
-            j -= 1
-        elif i > 0:
-            alignment.append(("deletion", ref_words[i - 1], None))
-            i -= 1
-        else:
-            break
-
-    alignment.reverse()
-    return alignment
-
-
-def format_annotated_transcript(
-    alignment: list[tuple[str, str | None, str | None]],
-) -> str:
-    """Render an alignment as a Markdown string with error markers.
-
-    * ~~word~~              — deletion  (in ground truth but not transcribed)
-    * **word**              — insertion (transcribed but not in ground truth)
-    * ~~expected~~**actual** — substitution (no space between)
-    """
-    parts: list[str] = []
-    for op, ref, hyp in alignment:
-        if op == "correct":
-            parts.append(hyp)  # type: ignore[arg-type]
-        elif op == "substitution":
-            parts.append(f"~~{ref}~~**{hyp}**")
-        elif op == "insertion":
-            parts.append(f"**{hyp}**")
-        elif op == "deletion":
-            parts.append(f"~~{ref}~~")
-    return " ".join(parts)
-
-
-def _alignment_error_counts(
-    alignment: list[tuple[str, str | None, str | None]],
-) -> tuple[int, int, int]:
-    """Return (substitutions, insertions, deletions) from an alignment."""
-    subs = sum(1 for op, _, _ in alignment if op == "substitution")
-    ins = sum(1 for op, _, _ in alignment if op == "insertion")
-    dels = sum(1 for op, _, _ in alignment if op == "deletion")
-    return subs, ins, dels
-
-
-def generate_transcript_report(
-    ground_truth: str,
-    input_transcript: str,
-    output_transcript: str,
-    input_file: str,
-    output_file: str,
-    filter_name: str,
-    stt_model: str,
-) -> str:
-    """Build a Markdown report comparing pre- and post-processed transcriptions."""
-    in_align = compute_word_alignment(ground_truth, input_transcript)
-    out_align = compute_word_alignment(ground_truth, output_transcript)
-
-    ref_words = len(ground_truth.split())
-    in_s, in_i, in_d = _alignment_error_counts(in_align)
-    out_s, out_i, out_d = _alignment_error_counts(out_align)
-    in_total = in_s + in_i + in_d
-    out_total = out_s + out_i + out_d
-    in_wer = (in_total / ref_words * 100) if ref_words else 0.0
-    out_wer = (out_total / ref_words * 100) if ref_words else 0.0
-
-    in_annotated = format_annotated_transcript(in_align)
-    out_annotated = format_annotated_transcript(out_align)
-
-    return f"""\
-# Transcription Report
-
-| | |
-|---|---|
-| **Input** | `{input_file}` |
-| **Output** | `{output_file}` |
-| **Filter** | {filter_name} |
-| **STT Model** | `{stt_model}` |
-
-## Metrics
-
-| Metric | Original | After {filter_name} |
-|--------|----------|------|
-| Word Error Rate (WER) | {in_wer:.1f}% | {out_wer:.1f}% |
-| Substitutions | {in_s} | {out_s} |
-| Insertions | {in_i} | {out_i} |
-| Deletions | {in_d} | {out_d} |
-| Total Errors | {in_total} | {out_total} |
-| Reference Words | {ref_words} | {ref_words} |
-
-## Error Legend
-
-| Syntax | Meaning |
-|--------|---------|
-| ~~word~~ | Missing word (in ground truth but not transcribed) |
-| **word** | Extra word (transcribed but not in ground truth) |
-| ~~expected~~**actual** | Wrong word (substitution) |
-
-## Ground Truth
-
-{ground_truth}
-
-## Original Transcription
-
-{input_transcript}
-
-### Diff
-
-{in_annotated}
-
-## After {filter_name}
-
-{output_transcript}
-
-### Diff
-
-{out_annotated}
-"""
-
-
 def setup_logging(log_level: str, silent: bool = False):
     """Setup beautiful Rich logging configuration"""
     level = getattr(logging, log_level.upper())
@@ -1323,20 +1191,11 @@ def main():
     )
     parser.add_argument(
         "--filter",
-        choices=[
-            "NC",
-            "BVC",
-            "BVCTelephony",
-            "WebRTC",
-            "aic-quail-l",
-            "aic-quail-vfl",
-            "aic-quail-vfs",
-            "viva-voice-isolation",
-            "viva-voice-isolation-telephony",
-            "all",
-        ],
         default="NC",
-        help="Noise cancellation filter type (default: NC). 'all' runs every filter and saves separate output files.",
+        help="Noise cancellation filter type (default: NC). Accepts a "
+        "comma-separated list (e.g. 'aic-quail-l,aic-quail-vfl') to run "
+        "several filters in one invocation, or 'all' to run every filter. "
+        f"Available: {', '.join(ALL_FILTERS)}",
     )
     parser.add_argument(
         "--log-level",
@@ -1380,25 +1239,51 @@ def main():
         action="store_true",
         help="Process audio directly through the plugin's FrameProcessor "
         "without routing through the LiveKit SFU.  Bypasses Opus "
-        "encode/decode so output is bit-exact with direct FFI processing.  "
+        "encode/decode so output is bit-exact with direct FFI processing, "
+        "and runs faster than real time.  "
         "Only compatible with ai-coustics filters (aic-quail-l, aic-quail-vfl, aic-quail-vfs).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Write a machine-readable <output>.metrics.json next to each "
+        "output file with WER metrics and raw transcripts. Requires -t.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="output",
+        help="Directory for default output files (default: output). "
+        "Ignored when -o is given with a single filter.",
     )
 
     args = parser.parse_args()
 
+    if args.filter == "all":
+        selected = list(ALL_FILTERS)
+    else:
+        selected = [f.strip() for f in args.filter.split(",") if f.strip()]
+        unknown = [f for f in selected if f not in ALL_FILTERS]
+        if unknown:
+            parser.error(
+                f"unknown filter(s): {', '.join(unknown)} "
+                f"(available: {', '.join(ALL_FILTERS)}, all)"
+            )
+        if not selected:
+            parser.error("--filter must name at least one filter")
+
     # --direct is only meaningful for ai-coustics FrameProcessor filters.
     _AIC_FILTERS = {"aic-quail-l", "aic-quail-vfl", "aic-quail-vfs"}
     if args.direct:
-        if args.filter == "all":
-            parser.error(
-                "--direct cannot be used with --filter all (it only supports "
-                "ai-coustics filters: aic-quail-l, aic-quail-vfl, aic-quail-vfs)"
-            )
-        if args.filter not in _AIC_FILTERS:
+        non_aic = [f for f in selected if f not in _AIC_FILTERS]
+        if non_aic:
             parser.error(
                 f"--direct is only supported with ai-coustics filters "
-                f"({', '.join(sorted(_AIC_FILTERS))}), not '{args.filter}'"
+                f"({', '.join(sorted(_AIC_FILTERS))}), not: {', '.join(non_aic)}"
             )
+
+    if args.json and not args.transcript:
+        parser.error("--json requires -t/--transcript")
 
     # Setup console for silent mode
     if args.silent:
@@ -1488,19 +1373,6 @@ def main():
         "viva-voice-isolation": lambda: krisp.voice_isolation(),
         "viva-voice-isolation-telephony": lambda: krisp.voice_isolation_telephony(),
     }
-    ALL_FILTERS = [
-        "NC",
-        "BVC",
-        "BVCTelephony",
-        "WebRTC",
-        "aic-quail-l",
-        "aic-quail-vfl",
-        "aic-quail-vfs",
-        "viva-voice-isolation",
-        "viva-voice-isolation-telephony",
-    ]
-    selected = ALL_FILTERS if args.filter == "all" else [args.filter]
-
     filter_configs: list[dict] = []
     for fk in selected:
         use_webrtc = fk == "WebRTC"
@@ -1508,7 +1380,7 @@ def main():
         if args.output and len(selected) == 1:
             out = Path(args.output)
         else:
-            out = Path(f"output/{input_path.stem}-{fk.lower()}-processed.wav")
+            out = Path(args.output_dir) / f"{input_path.stem}-{fk.lower()}-processed.wav"
         out.parent.mkdir(parents=True, exist_ok=True)
         filter_configs.append(
             {
@@ -1528,6 +1400,7 @@ def main():
             "stt": args.stt,
             "direct": args.direct,
             "sample_rate": args.sample_rate,
+            "json": args.json,
         }
     )
 

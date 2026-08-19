@@ -16,3 +16,6 @@ __pycache__/
 *.pyzw
 
 .DS_Store
+
+benchmark_data/
+benchmark_results/

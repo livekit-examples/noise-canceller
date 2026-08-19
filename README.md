@@ -82,6 +82,62 @@ The report is saved as a `.transcript.md` file alongside each output file and in
   - **word** — extra word (transcribed but not in ground truth)
   - ~~expected~~**actual** — wrong word (substitution)
 
+## Benchmarks
+
+`benchmark.py` runs the WER analysis above over full datasets instead of single
+files, and aggregates the per-clip metrics into paired statistics per filter.
+
+Two suites are supported, both from ai-coustics on Hugging Face (CC BY-NC 4.0,
+downloaded at run time, never committed):
+
+- `voice-focus-examples` (n=10) — the demo set the docs samples come from.
+  A smoke test, too small for conclusions.
+- `dawn-chorus-en` (n=450) — ai-coustics' competing-talker benchmark
+  (foreground speaker + background speech + noise, human transcripts).
+  The dataset behind their published WER numbers.
+
+The suites are reported separately on purpose: averaging a 10-clip demo set
+into a 450-clip benchmark would skew the distribution.
+
+```bash
+# 1. Download a suite (needs the 'benchmark' dependency group)
+uv run --group benchmark benchmark.py fetch dawn-chorus-en
+
+# 2. Run filters over it (resumable; skips already-scored clips)
+uv run benchmark.py run --suite dawn-chorus-en \
+    --filters aic-quail-l,aic-quail-vfl,aic-quail-vfs --jobs 4
+
+# 3. Aggregate into a Markdown report
+uv run benchmark.py report benchmark_results/dawn-chorus-en/results.jsonl
+```
+
+The report shows, per filter: mean WER on original vs. processed audio, the
+mean paired delta with a bootstrap 95% CI, better/tie/worse clip counts, and
+the substitution/insertion/deletion decomposition. Raw per-clip metrics and
+ASR hypotheses are kept in `results.jsonl` for re-analysis without
+re-transcribing.
+
+**Cost and time:** each clip is processed in real time through LiveKit Cloud
+and consumes connection minutes. Dawn Chorus is ~2.4 hours of audio per
+filter; `--jobs` runs clips concurrently. For ai-coustics filters,
+`--direct` bypasses the SFU and runs faster than real time.
+
+### Benchmarking unreleased ai-coustics plugin builds
+
+The ai-coustics models run locally inside the installed
+`livekit-plugins-ai-coustics` wheel (the cloud connection only supplies
+license credentials), so the benchmark can gate an SDK or model upgrade
+*before* release: build a wheel from the plugin branch and point uv at it,
+then run the same benchmark against both wheels.
+
+```toml
+# pyproject.toml
+[tool.uv.sources]
+livekit-plugins-ai-coustics = { path = "../plugins-ai-coustics-internal/dist/livekit_plugins_ai_coustics-X.Y.Z-....whl" }
+```
+
+Same clips, same STT, same report — the only variable is the wheel.
+
 ## License
 
 This tool is provided as-is under the MIT License. See [LICENSE](LICENSE) for details.

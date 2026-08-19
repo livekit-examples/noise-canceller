@@ -17,3 +17,5 @@ dependencies = [
 
 [dependency-groups]
 dev = ["mypy>=2.3.0"]
+# Only needed for `benchmark.py fetch` (downloads datasets from Hugging Face).
+benchmark = ["datasets>=3.0"]
