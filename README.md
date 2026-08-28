@@ -87,14 +87,21 @@ The report is saved as a `.transcript.md` file alongside each output file and in
 `benchmark.py` runs the WER analysis above over full datasets instead of single
 files, and aggregates the per-clip metrics into paired statistics per filter.
 
-Two suites are supported, both from ai-coustics on Hugging Face (CC BY-NC 4.0,
+Three suites are supported, all from ai-coustics on Hugging Face (CC BY-NC 4.0,
 downloaded at run time, never committed):
 
 - `voice-focus-examples` (n=10) — the demo set the docs samples come from.
   A smoke test, too small for conclusions.
 - `dawn-chorus-en` (n=450) — ai-coustics' competing-talker benchmark
   (foreground speaker + background speech + noise, human transcripts).
-  The dataset behind their published WER numbers.
+  The dataset behind their published WER numbers. ai-coustics no longer uses
+  it internally: the clips are short, and Voice Focus 2.1+ waits out a
+  warm-up period before suppressing a background speaker who talks first.
+- `aic-test-calls-en` (n=83) — ai-coustics' recommended replacement,
+  [`aic_test_calls_en`](https://huggingface.co/datasets/ai-coustics/aic_test_calls_en):
+  longer, more realistic voice-agent recordings. `voice-focus-examples` is a
+  small subset of the same source. ai-coustics recommends enhancement level
+  0.8 (`--enhancement-level 0.8`) for benchmarks.
 
 The suites are reported separately on purpose: averaging a 10-clip demo set
 into a 450-clip benchmark would skew the distribution.

@@ -11,9 +11,16 @@ Suites (kept separate on purpose — never average across them):
   from these clips. Good as a smoke test, too small for conclusions.
 - dawn-chorus-en        (n=450): ai-coustics' competing-talker benchmark
   (foreground speaker + background speech + noise, human transcripts).
-  This is the dataset behind their published WER numbers.
+  This is the dataset behind their published WER numbers. ai-coustics has
+  since moved away from it internally: the clips are short, and Voice Focus
+  2.1+ deliberately waits out a warm-up period before suppressing a
+  background speaker who talks first, which penalizes short clips.
+- aic-test-calls-en     (n=83): ai-coustics' recommended replacement — a
+  published subset of their internal aic_calls set with longer, more
+  realistic voice-agent recordings. voice-focus-examples is a small subset
+  of the same source. They recommend enhancement level 0.8 for benchmarks.
 
-Both datasets are CC BY-NC 4.0, fetched from Hugging Face at run time and
+All three datasets are CC BY-NC 4.0, fetched from Hugging Face at run time and
 never committed to this repo.
 
 Usage:
@@ -26,8 +33,8 @@ Usage:
 
 `run` shells out to noise-canceller.py per clip, so each job consumes
 LiveKit Cloud connection minutes and processes in real time — use --jobs to
-run clips concurrently, or --direct (ai-coustics filters only) to bypass the
-SFU and run faster than real time. Runs are resumable: already-scored
+run clips concurrently, or --direct (ai-coustics and Krisp Viva filters) to
+bypass the SFU and run faster than real time. Runs are resumable: already-scored
 (clip, filter) pairs are skipped.
 """
 
@@ -51,6 +58,10 @@ SUITES = {
     },
     "dawn-chorus-en": {
         "hf_dataset": "ai-coustics/dawn_chorus_en",
+        "audio_column": "mix",
+    },
+    "aic-test-calls-en": {
+        "hf_dataset": "ai-coustics/aic_test_calls_en",
         "audio_column": "mix",
     },
 }
@@ -368,7 +379,7 @@ def main() -> None:
     p_run.add_argument(
         "--direct",
         action="store_true",
-        help="bypass the SFU (ai-coustics filters only, faster than real time)",
+        help="bypass the SFU (ai-coustics and Krisp Viva filters, faster than real time)",
     )
     p_run.add_argument("--limit", type=int, help="only run the first N clips")
     p_run.add_argument("--stt", default="deepgram/nova-3:en")

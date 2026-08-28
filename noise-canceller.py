@@ -1241,7 +1241,9 @@ def main():
         "without routing through the LiveKit SFU.  Bypasses Opus "
         "encode/decode so output is bit-exact with direct FFI processing, "
         "and runs faster than real time.  "
-        "Only compatible with ai-coustics filters (aic-quail-l, aic-quail-vfl, aic-quail-vfs).",
+        "Only compatible with FrameProcessor-based filters: the ai-coustics "
+        "filters and the Krisp Viva filters (viva-voice-isolation, "
+        "viva-voice-isolation-telephony).",
     )
     parser.add_argument(
         "--json",
@@ -1272,14 +1274,23 @@ def main():
         if not selected:
             parser.error("--filter must name at least one filter")
 
-    # --direct is only meaningful for ai-coustics FrameProcessor filters.
-    _AIC_FILTERS = {"aic-quail-l", "aic-quail-vfl", "aic-quail-vfs"}
+    # --direct drives the plugin's FrameProcessor in-process, so it works for
+    # the ai-coustics and Krisp Viva filters. The SFU-side Krisp filters
+    # (NC, BVC, BVCTelephony) have no local FrameProcessor.
+    _DIRECT_FILTERS = {
+        "aic-quail-l",
+        "aic-quail-vfl",
+        "aic-quail-vfs",
+        "viva-voice-isolation",
+        "viva-voice-isolation-telephony",
+    }
     if args.direct:
-        non_aic = [f for f in selected if f not in _AIC_FILTERS]
-        if non_aic:
+        unsupported = [f for f in selected if f not in _DIRECT_FILTERS]
+        if unsupported:
             parser.error(
-                f"--direct is only supported with ai-coustics filters "
-                f"({', '.join(sorted(_AIC_FILTERS))}), not: {', '.join(non_aic)}"
+                f"--direct is only supported with FrameProcessor filters "
+                f"({', '.join(sorted(_DIRECT_FILTERS))}), "
+                f"not: {', '.join(unsupported)}"
             )
 
     if args.json and not args.transcript:
