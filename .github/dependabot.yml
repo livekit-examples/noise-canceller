@@ -1,11 +1,12 @@
 # Security updates only: version-update PRs are off (open-pull-requests-limit: 0)
-# and security fixes are grouped instead of one PR per package.
+# and security fixes are grouped instead of one PR per package. Security PRs open
+# when an advisory lands; the schedule only applies if version updates are turned on.
 version: 2
 updates:
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "quarterly"
     open-pull-requests-limit: 0
     groups:
       security:
