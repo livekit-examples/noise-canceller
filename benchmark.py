@@ -45,7 +45,9 @@ import json
 import random
 import statistics
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "benchmark_data"
@@ -263,15 +265,40 @@ async def cmd_run(args: argparse.Namespace) -> None:
 
 
 def bootstrap_ci(
-    deltas: list[float], iterations: int = 2000, seed: int = 0
+    samples: list[Any],
+    statistic: Callable[[list[Any]], float] = statistics.fmean,
+    iterations: int = 2000,
+    seed: int = 0,
 ) -> tuple[float, float]:
-    """95% bootstrap CI of the mean paired delta."""
+    """95% bootstrap CI of `statistic` over `samples` resampled with replacement.
+
+    The default statistic is the mean, i.e. the CI of the mean paired delta.
+    """
     rng = random.Random(seed)
-    n = len(deltas)
-    means = sorted(
-        statistics.fmean(rng.choices(deltas, k=n)) for _ in range(iterations)
+    n = len(samples)
+    values = sorted(
+        statistic(rng.choices(samples, k=n)) for _ in range(iterations)
     )
-    return means[int(0.025 * iterations)], means[int(0.975 * iterations) - 1]
+    return values[int(0.025 * iterations)], values[int(0.975 * iterations) - 1]
+
+
+def micro_wer(scores: list[dict]) -> float:
+    """Corpus WER: total errors / total reference words (sclite-style)."""
+    words = sum(s["ref_words"] for s in scores)
+    return sum(s["total_errors"] for s in scores) / words if words else 0.0
+
+
+def micro_wer_delta(frows: list[dict]) -> float:
+    """Paired corpus-WER delta, processed - original, over the same clips."""
+    return micro_wer([r["processed"] for r in frows]) - micro_wer(
+        [r["original"] for r in frows]
+    )
+
+
+def format_ci(lo: float, hi: float) -> tuple[bool, str]:
+    """(CI excludes zero, CI formatted in percentage points)."""
+    significant = (lo > 0 and hi > 0) or (lo < 0 and hi < 0)
+    return significant, f"[{lo * 100:+.2f}, {hi * 100:+.2f}]"
 
 
 def cmd_report(args: argparse.Namespace) -> None:
@@ -290,7 +317,12 @@ def cmd_report(args: argparse.Namespace) -> None:
         f"- STT model(s): {', '.join(stt_models)}",
         "",
         "WER convention matches noise-canceller.py reports: "
-        "(S+I+D) / reference words, punctuation-insensitive, case-insensitive.",
+        "(S+I+D) / reference words, punctuation-insensitive, case-insensitive. "
+        "Headline WER is corpus (micro) WER: errors and reference words are "
+        "summed over all clips before dividing, so a long call counts more than "
+        "a five-word clip. The mean of per-clip WER is shown alongside; it "
+        "weighs every clip equally and is dominated by short clips, where a "
+        "single inserted phrase can exceed 100% WER.",
         "",
     ]
 
@@ -300,11 +332,18 @@ def cmd_report(args: argparse.Namespace) -> None:
         lines += [
             f"## {suite}",
             "",
-            "| filter | n | WER orig | WER proc | Δ (pp) | 95% CI (pp) | rel. | better/tie/worse | S/I/D proc |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| filter | n | WER orig | WER proc | Δ (pp) | 95% CI (pp) | rel. "
+            "| mean clip WER orig | mean clip WER proc | mean clip Δ (pp) "
+            "| mean clip 95% CI (pp) | better/tie/worse | S/I/D proc |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
         for fk in filters:
             frows = [r for r in suite_rows if r["filter"] == fk]
+            # Headline: corpus (micro) WER, every reference word weighs the same.
+            wer_orig = micro_wer([r["original"] for r in frows])
+            wer_proc = micro_wer([r["processed"] for r in frows])
+            wer_delta = micro_wer_delta(frows)
+            # Secondary: mean of per-clip WER (macro), every clip weighs the same.
             orig = [r["original"]["wer"] for r in frows]
             proc = [r["processed"]["wer"] for r in frows]
             deltas = [p - o for o, p in zip(orig, proc)]
@@ -312,12 +351,12 @@ def cmd_report(args: argparse.Namespace) -> None:
             mean_proc = statistics.fmean(proc)
             mean_delta = statistics.fmean(deltas)
             if len(deltas) > 1:
-                lo, hi = bootstrap_ci(deltas)
-                significant = (lo > 0 and hi > 0) or (lo < 0 and hi < 0)
-                ci = f"[{lo * 100:+.2f}, {hi * 100:+.2f}]"
+                significant, ci = format_ci(*bootstrap_ci(frows, micro_wer_delta))
+                mean_significant, mean_ci = format_ci(*bootstrap_ci(deltas))
             else:
                 significant, ci = False, "n/a"
-            rel = (mean_delta / mean_orig * 100) if mean_orig else 0.0
+                mean_significant, mean_ci = False, "n/a"
+            rel = (wer_delta / wer_orig * 100) if wer_orig else 0.0
             better = sum(1 for d in deltas if d < 0)
             worse = sum(1 for d in deltas if d > 0)
             tie = len(deltas) - better - worse
@@ -325,10 +364,13 @@ def cmd_report(args: argparse.Namespace) -> None:
             i_ = sum(r["processed"]["insertions"] for r in frows)
             d = sum(r["processed"]["deletions"] for r in frows)
             bold = "**" if significant else ""
+            mean_bold = "**" if mean_significant else ""
             lines.append(
-                f"| {fk} | {len(frows)} | {mean_orig * 100:.1f}% "
-                f"| {mean_proc * 100:.1f}% "
-                f"| {bold}{mean_delta * 100:+.2f}{bold} | {ci} | {rel:+.1f}% "
+                f"| {fk} | {len(frows)} | {wer_orig * 100:.1f}% "
+                f"| {wer_proc * 100:.1f}% "
+                f"| {bold}{wer_delta * 100:+.2f}{bold} | {ci} | {rel:+.1f}% "
+                f"| {mean_orig * 100:.1f}% | {mean_proc * 100:.1f}% "
+                f"| {mean_bold}{mean_delta * 100:+.2f}{mean_bold} | {mean_ci} "
                 f"| {better}/{tie}/{worse} | {s}/{i_}/{d} |"
             )
         # Original-audio error decomposition, once per suite (identical
@@ -341,7 +383,8 @@ def cmd_report(args: argparse.Namespace) -> None:
             "",
             f"Original audio S/I/D: {s}/{i_}/{d} over {len(first)} clips. "
             "Δ is processed − original WER in percentage points; negative is "
-            "better. Bold Δ means the 95% CI excludes zero.",
+            "better. Bold Δ means the 95% CI (bootstrap over clips) excludes "
+            "zero.",
             "",
         ]
 

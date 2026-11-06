@@ -116,9 +116,14 @@ uv run benchmark.py run --suite dawn-chorus-en \
 uv run benchmark.py report benchmark_results/dawn-chorus-en/results.jsonl
 ```
 
-The report shows, per filter: mean WER on original vs. processed audio, the
-mean paired delta with a bootstrap 95% CI, better/tie/worse clip counts, and
-the substitution/insertion/deletion decomposition. Raw per-clip metrics and
+The report shows, per filter: corpus (micro) WER on original vs. processed
+audio, i.e. errors and reference words summed over all clips before dividing,
+with the paired delta and a bootstrap 95% CI over clips; the mean of per-clip
+WER with its own CI; better/tie/worse clip counts; and the
+substitution/insertion/deletion decomposition. Corpus WER is the headline
+because the per-clip mean weighs a five-word clip like a two-minute call, so a
+single inserted phrase on a short clip (well over 100% WER) can move it by
+several points. Raw per-clip metrics and
 ASR hypotheses are kept in `results.jsonl` for re-analysis without
 re-transcribing.
 
