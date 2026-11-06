@@ -7,21 +7,29 @@ collects per-clip WER metrics, and aggregates them into paired statistics
 
 Suites (kept separate on purpose — never average across them):
 
-- voice-focus-examples  (n=10): ai-coustics' demo set. The docs samples come
-  from these clips. Good as a smoke test, too small for conclusions.
+- voice-focus-examples  (n=10): ai-coustics' demo set (VF 2.3 version). Good
+  as a smoke test, too small for conclusions.
 - dawn-chorus-en        (n=450): ai-coustics' competing-talker benchmark
   (foreground speaker + background speech + noise, human transcripts).
   This is the dataset behind their published WER numbers. ai-coustics has
   since moved away from it internally: the clips are short, and Voice Focus
   2.1+ deliberately waits out a warm-up period before suppressing a
   background speaker who talks first, which penalizes short clips.
-- aic-test-calls-en     (n=83): ai-coustics' recommended replacement — a
-  published subset of their internal aic_calls set with longer, more
-  realistic voice-agent recordings. voice-focus-examples is a small subset
-  of the same source. They recommend enhancement level 0.8 for benchmarks.
+- aic-test-calls-en     (n=110): ai-coustics' recommended replacement — real
+  recorded calls, each trimmed to start 0.15 s before the caller's first
+  word. They recommend enhancement level 0.8 for benchmarks.
+- aic-test-calls-en-untrimmed (n=83): the earlier, untrimmed release of the
+  same set. A background talker may speak before the caller, so this suite
+  also measures which voice a model locks on to.
+- krisp-vi-call-center  (n=106), krisp-vi-work (n=96), krisp-vi-phone-calls
+  (n=63): Krisp's Voice Isolation benchmark. Real recordings at 32 kHz.
+  Call center and work clips script a secondary talker who speaks alone for
+  about 30% of the time (the correct transcript there is empty); phone calls
+  are mostly a single caller on band-limited audio.
 
-All three datasets are CC BY-NC 4.0, fetched from Hugging Face at run time and
-never committed to this repo.
+Every suite is pinned to a Hugging Face revision, so its clips cannot change
+under existing results. All datasets are CC BY-NC 4.0, fetched from Hugging
+Face at run time and never committed to this repo.
 
 Usage:
     uv run benchmark.py run --suite dawn-chorus-en \
@@ -53,20 +61,42 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "benchmark_data"
 RESULTS_DIR = ROOT / "benchmark_results"
 
-SUITES = {
+AIC_SUITE = {"audio_column": "mix", "transcript_column": "transcript"}
+KRISP_SUITE = {
+    "hf_dataset": "Krisp-AI/VoiceIsolation-Benchmark-Dataset",
+    "revision": "626bac8ca07fb9b4846d4f62d27c321753160b36",
+    "transcript_column": "full_transcript",
+}
+
+# Revisions are commit SHAs, not tags or branches: a dataset owner can move
+# either, and resumed runs would then mix clips from two releases.
+SUITES: dict[str, dict[str, str]] = {
     "voice-focus-examples": {
+        **AIC_SUITE,
         "hf_dataset": "ai-coustics/voice-focus-examples",
-        "audio_column": "mix",
+        "revision": "499760ccd7655e3df626a357ad32282ff171e562",
     },
     "dawn-chorus-en": {
+        **AIC_SUITE,
         "hf_dataset": "ai-coustics/dawn_chorus_en",
-        "audio_column": "mix",
+        "revision": "d0294c5f5f8a76e657fa3caef6408267ef931e4a",
     },
     "aic-test-calls-en": {
+        **AIC_SUITE,
         "hf_dataset": "ai-coustics/aic_test_calls_en",
-        "audio_column": "mix",
+        "revision": "ddc6f123102bc08ee477e375e2f65c95189e93fc",
     },
+    "aic-test-calls-en-untrimmed": {
+        **AIC_SUITE,
+        "hf_dataset": "ai-coustics/aic_test_calls_en",
+        # tag v1-83-untrimmed
+        "revision": "3825a2dc1a1146c17627fb92a022a8d43c0dd71c",
+    },
+    "krisp-vi-call-center": {**KRISP_SUITE, "config": "call_center"},
+    "krisp-vi-work": {**KRISP_SUITE, "config": "work"},
+    "krisp-vi-phone-calls": {**KRISP_SUITE, "config": "phone_calls"},
 }
+REVISION_FILE = "REVISION"
 
 
 # ---------------------------------------------------------------------------
@@ -74,11 +104,47 @@ SUITES = {
 # ---------------------------------------------------------------------------
 
 
+def load_parquet_rows(suite: dict[str, str]) -> list[tuple[dict, bytes]]:
+    """(row, audio bytes) for a suite stored as parquet (ai-coustics)."""
+    from datasets import Audio, load_dataset
+
+    dataset = load_dataset(suite["hf_dataset"], revision=suite["revision"])
+    split = dataset[next(iter(dataset))]
+    # decode=False keeps the raw bytes; soundfile decodes them without
+    # needing torchcodec. Cast every audio column (dawn-chorus-en also has
+    # a clean 'speech' reference we don't use).
+    for name, feature in split.features.items():
+        if isinstance(feature, Audio):
+            split = split.cast_column(name, Audio(decode=False))
+    return [(row, row[suite["audio_column"]]["bytes"]) for row in split]
+
+
+def load_audiofolder_rows(suite: dict[str, str]) -> list[tuple[dict, bytes]]:
+    """(row, audio bytes) for a suite stored as WAVs + metadata.jsonl (Krisp).
+
+    load_dataset would re-encode this layout and needs torchcodec for that,
+    so download the files directly instead.
+    """
+    from huggingface_hub import snapshot_download
+
+    config = suite["config"]
+    root = Path(
+        snapshot_download(
+            suite["hf_dataset"],
+            repo_type="dataset",
+            revision=suite["revision"],
+            allow_patterns=f"{config}/*",
+        )
+    ) / config
+    rows = load_results(root / "metadata.jsonl")
+    return [(row, (root / row["file_name"]).read_bytes()) for row in rows]
+
+
 def cmd_fetch(args: argparse.Namespace) -> None:
     # Imported here so `run` and `report` work without the benchmark group.
     try:
         import soundfile as sf
-        from datasets import Audio, load_dataset
+        import datasets  # noqa: F401
     except ImportError:
         sys.exit(
             "fetch needs the 'benchmark' dependency group: "
@@ -89,34 +155,29 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     out_dir = DATA_DIR / args.suite
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = load_dataset(suite["hf_dataset"])
-    split = dataset[next(iter(dataset))]
-    audio_column = suite["audio_column"]
-    # decode=False keeps the raw bytes; soundfile decodes them without
-    # needing torchcodec. Cast every audio column (dawn-chorus-en also has
-    # a clean 'speech' reference we don't use).
-    for name, feature in split.features.items():
-        if isinstance(feature, Audio):
-            split = split.cast_column(name, Audio(decode=False))
-    print(f"{args.suite}: {len(split)} clips, columns: {split.column_names}")
+    if "config" in suite:
+        rows = load_audiofolder_rows(suite)
+    else:
+        rows = load_parquet_rows(suite)
+    print(f"{args.suite}: {len(rows)} clips, columns: {list(rows[0][0])}")
 
     with open(out_dir / "manifest.jsonl", "w") as manifest:
-        for i, row in enumerate(split):
+        for i, (row, audio) in enumerate(rows):
             clip_id = str(row.get("id") or f"clip{i:04d}")
-            samples, sr = sf.read(
-                io.BytesIO(row[audio_column]["bytes"]), dtype="float32"
-            )
+            samples, sr = sf.read(io.BytesIO(audio), dtype="float32")
             sf.write(out_dir / f"{clip_id}.wav", samples, sr)
-            transcript = str(row["transcript"]).strip()
+            transcript = str(row[suite["transcript_column"]]).strip()
             (out_dir / f"{clip_id}.txt").write_text(transcript + "\n")
             condition = {
                 k: v
                 for k, v in row.items()
-                if k != "transcript" and not isinstance(v, dict)
+                if k != suite["transcript_column"] and not isinstance(v, dict)
             }
             manifest.write(
                 json.dumps({"id": clip_id, "condition": condition}) + "\n"
             )
+    # Written last, so an interrupted fetch leaves no revision marker.
+    (out_dir / REVISION_FILE).write_text(suite["revision"] + "\n")
     print(f"written to {out_dir}")
 
 
@@ -136,8 +197,17 @@ def load_results(path: Path) -> list[dict]:
 
 
 async def cmd_run(args: argparse.Namespace) -> None:
+    revision = SUITES[args.suite]["revision"]
     data_dir = DATA_DIR / args.suite
     clips = sorted(data_dir.glob("*.wav"))
+    revision_path = data_dir / REVISION_FILE
+    fetched = revision_path.read_text().strip() if revision_path.exists() else None
+    if clips and fetched != revision:
+        sys.exit(
+            f"{data_dir} holds revision {fetched or 'unknown'}, but "
+            f"{args.suite} is pinned to {revision}. Delete that directory "
+            "to fetch the pinned revision."
+        )
     if not clips:
         # First run: fetch the suite automatically. The subprocess pulls in
         # the 'benchmark' dependency group so this venv stays light.
@@ -162,9 +232,15 @@ async def cmd_run(args: argparse.Namespace) -> None:
     audio_dir.mkdir(parents=True, exist_ok=True)
     results_path = results_dir / "results.jsonl"
 
-    done = {
-        (row["clip"], row["filter"]) for row in load_results(results_path)
-    }
+    existing = load_results(results_path)
+    stale = {row.get("dataset_revision") for row in existing} - {revision}
+    if stale:
+        sys.exit(
+            f"{results_path} has rows from another dataset revision "
+            f"({', '.join(sorted(r or 'unknown' for r in stale))}). "
+            "Move it away before running against the pinned revision."
+        )
+    done = {(row["clip"], row["filter"]) for row in existing}
     todo: list[tuple[Path, list[str]]] = []
     for clip in clips:
         missing = [f for f in filters if (clip.stem, f) not in done]
@@ -239,6 +315,7 @@ async def cmd_run(args: argparse.Namespace) -> None:
                 continue
             metrics = json.loads(metrics_path.read_text())
             metrics["suite"] = args.suite
+            metrics["dataset_revision"] = revision
             metrics["clip"] = clip.stem
             rows.append(metrics)
             counters["ok"] += 1
@@ -309,11 +386,13 @@ def cmd_report(args: argparse.Namespace) -> None:
 
     suites = sorted({row.get("suite", "?") for row in rows})
     stt_models = sorted({row.get("stt_model", "?") for row in rows})
+    revisions = sorted({row.get("dataset_revision") or "unknown" for row in rows})
     lines = [
         "# WER benchmark report",
         "",
         f"- results: `{results_path}`",
         f"- suite(s): {', '.join(suites)}",
+        f"- dataset revision(s): {', '.join(revisions)}",
         f"- STT model(s): {', '.join(stt_models)}",
         "",
         "WER convention matches noise-canceller.py reports: "
