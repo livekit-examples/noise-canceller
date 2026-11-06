@@ -1,0 +1,21 @@
+README.md
+  s_74519325735952::t_2e91e9a6f446a5 90,93,100,102-116,121-125
+benchmark.py
+  s_74519325735952::t_dfd945d8535f01 10-11,18-32,64-73,75,77,80,82,85-90,92-93,95-97,99,107-142,147,158-162,165,167,169,174,179-180,200,203-210,235-243,318,389,395
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "03f61affdffcead6396b0b3beff0c889e753a765",
+  "prompts": {},
+  "sessions": {
+    "s_74519325735952": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "812a26ad-8194-4ae1-aea3-c69c1007525c",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
