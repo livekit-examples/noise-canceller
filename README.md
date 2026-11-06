@@ -87,24 +87,41 @@ The report is saved as a `.transcript.md` file alongside each output file and in
 `benchmark.py` runs the WER analysis above over full datasets instead of single
 files, and aggregates the per-clip metrics into paired statistics per filter.
 
-Three suites are supported, all from ai-coustics on Hugging Face (CC BY-NC 4.0,
+The suites come from ai-coustics and Krisp on Hugging Face (CC BY-NC 4.0,
 downloaded at run time, never committed):
 
-- `voice-focus-examples` (n=10) — the demo set the docs samples come from.
+- `voice-focus-examples` (n=10) — ai-coustics' demo set (VF 2.3 version).
   A smoke test, too small for conclusions.
 - `dawn-chorus-en` (n=450) — ai-coustics' competing-talker benchmark
   (foreground speaker + background speech + noise, human transcripts).
   The dataset behind their published WER numbers. ai-coustics no longer uses
   it internally: the clips are short, and Voice Focus 2.1+ waits out a
   warm-up period before suppressing a background speaker who talks first.
-- `aic-test-calls-en` (n=83) — ai-coustics' recommended replacement,
+- `aic-test-calls-en` (n=110) — ai-coustics' recommended replacement,
   [`aic_test_calls_en`](https://huggingface.co/datasets/ai-coustics/aic_test_calls_en):
-  longer, more realistic voice-agent recordings. `voice-focus-examples` is a
-  small subset of the same source. ai-coustics recommends enhancement level
-  0.8 (`--enhancement-level 0.8`) for benchmarks.
+  real recorded calls. Every clip is
+  [trimmed](https://huggingface.co/datasets/ai-coustics/aic_test_calls_en#trimming)
+  to start 0.15 s before the caller's first word. ai-coustics recommends
+  enhancement level 0.8 (`--enhancement-level 0.8`) for benchmarks.
+- `aic-test-calls-en-untrimmed` (n=83) — the earlier, untrimmed release of
+  the same set (tag `v1-83-untrimmed`). Some clips have a background talker
+  before the caller speaks, so this suite also tests which voice a model
+  locks on to. Compare it with the trimmed suite to see that effect.
+- `krisp-vi-call-center` (n=106), `krisp-vi-work` (n=96) and
+  `krisp-vi-phone-calls` (n=63) — Krisp's
+  [Voice Isolation benchmark](https://huggingface.co/datasets/Krisp-AI/VoiceIsolation-Benchmark-Dataset),
+  32 kHz real recordings. In the call center and work sets, a scripted
+  secondary talker speaks alone for about 30% of the time, and the correct
+  transcript for that stretch is empty. The phone calls set is mostly a
+  single caller on band-limited audio.
 
 The suites are reported separately on purpose: averaging a 10-clip demo set
 into a 450-clip benchmark would skew the distribution.
+
+Each suite is pinned to a Hugging Face commit, and `benchmark_data/<suite>/`
+records the revision it was fetched at. `run` stops if the local data or
+`results.jsonl` comes from a different revision. Delete the data directory to
+fetch the pinned revision, and move the old results away.
 
 ```bash
 # 1. Run filters over a suite (fetches the dataset automatically on first
