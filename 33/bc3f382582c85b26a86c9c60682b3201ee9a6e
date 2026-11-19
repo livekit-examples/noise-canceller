@@ -1,0 +1,23 @@
+README.md
+  s_7161c3ab210279::t_e63ef0803a4cf3 124-126
+benchmark.py
+  s_7161c3ab210279::t_ea8cc6843eb289 243-258,336,407-410,418,534-535
+noise-canceller.py
+  s_7161c3ab210279::t_59ecbc9966b054 832-833,837,844-849,1175,1179,1359,1362,1378
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "33bc3f382582c85b26a86c9c60682b3201ee9a6e",
+  "prompts": {},
+  "sessions": {
+    "s_7161c3ab210279": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a13aebbf-6333-4c6f-815b-c58580c8550d",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
