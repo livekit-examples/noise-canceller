@@ -37,7 +37,8 @@ Usage:
     uv run benchmark.py report benchmark_results/dawn-chorus-en/results.jsonl
 
 `run` fetches the suite from Hugging Face automatically on first use; the
-`fetch` subcommand exists only to pre-download.
+`fetch` subcommand exists only to pre-download. `fetch` replaces any data
+already in `benchmark_data/<suite>/`.
 
 `run` shells out to noise-canceller.py per clip, so each job consumes
 LiveKit Cloud connection minutes and processes in real time — use --jobs to
@@ -51,9 +52,10 @@ import asyncio
 import io
 import json
 import random
+import shutil
 import statistics
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -104,7 +106,7 @@ REVISION_FILE = "REVISION"
 # ---------------------------------------------------------------------------
 
 
-def load_parquet_rows(suite: dict[str, str]) -> list[tuple[dict, bytes]]:
+def load_parquet_rows(suite: dict[str, str]) -> Iterator[tuple[dict, bytes]]:
     """(row, audio bytes) for a suite stored as parquet (ai-coustics)."""
     from datasets import Audio, load_dataset
 
@@ -116,10 +118,11 @@ def load_parquet_rows(suite: dict[str, str]) -> list[tuple[dict, bytes]]:
     for name, feature in split.features.items():
         if isinstance(feature, Audio):
             split = split.cast_column(name, Audio(decode=False))
-    return [(row, row[suite["audio_column"]]["bytes"]) for row in split]
+    for row in split:
+        yield row, row[suite["audio_column"]]["bytes"]
 
 
-def load_audiofolder_rows(suite: dict[str, str]) -> list[tuple[dict, bytes]]:
+def load_audiofolder_rows(suite: dict[str, str]) -> Iterator[tuple[dict, bytes]]:
     """(row, audio bytes) for a suite stored as WAVs + metadata.jsonl (Krisp).
 
     load_dataset would re-encode this layout and needs torchcodec for that,
@@ -136,8 +139,8 @@ def load_audiofolder_rows(suite: dict[str, str]) -> list[tuple[dict, bytes]]:
             allow_patterns=f"{config}/*",
         )
     ) / config
-    rows = load_results(root / "metadata.jsonl")
-    return [(row, (root / row["file_name"]).read_bytes()) for row in rows]
+    for row in load_results(root / "metadata.jsonl"):
+        yield row, (root / row["file_name"]).read_bytes()
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
@@ -153,14 +156,18 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
     suite = SUITES[args.suite]
     out_dir = DATA_DIR / args.suite
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Start from an empty directory: clips that a previous revision had and
+    # this one dropped would otherwise survive under the new REVISION.
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
 
     if "config" in suite:
         rows = load_audiofolder_rows(suite)
     else:
         rows = load_parquet_rows(suite)
-    print(f"{args.suite}: {len(rows)} clips, columns: {list(rows[0][0])}")
 
+    count = 0
     with open(out_dir / "manifest.jsonl", "w") as manifest:
         for i, (row, audio) in enumerate(rows):
             clip_id = str(row.get("id") or f"clip{i:04d}")
@@ -176,9 +183,10 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             manifest.write(
                 json.dumps({"id": clip_id, "condition": condition}) + "\n"
             )
+            count += 1
     # Written last, so an interrupted fetch leaves no revision marker.
     (out_dir / REVISION_FILE).write_text(suite["revision"] + "\n")
-    print(f"written to {out_dir}")
+    print(f"{args.suite}: {count} clips written to {out_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -238,11 +246,12 @@ async def cmd_run(args: argparse.Namespace) -> None:
         sys.exit(
             f"{results_path} has rows from another dataset revision "
             f"({', '.join(sorted(r or 'unknown' for r in stale))}). "
-            "Move it away before running against the pinned revision."
+            f"Move {results_dir} away before running against the pinned revision."
         )
     # Resuming skips scored (clip, filter) pairs, so every row in the file
     # must come from the same settings as this run.
     settings = {
+        "suite": args.suite,
         "stt_model": args.stt,
         "sample_rate": args.sample_rate,
         "direct": args.direct,
@@ -254,7 +263,8 @@ async def cmd_run(args: argparse.Namespace) -> None:
             sys.exit(
                 f"{results_path} has rows with {key}="
                 f"{', '.join(sorted(map(str, other)))}, but this run uses "
-                f"{key}={value}. Move it away, or run with the same settings."
+                f"{key}={value}. Move {results_dir} away, or run with the "
+                "same settings."
             )
     done = {(row["clip"], row["filter"]) for row in existing}
     todo: list[tuple[Path, list[str]]] = []
@@ -302,6 +312,15 @@ async def cmd_run(args: argparse.Namespace) -> None:
         if args.enhancement_level is not None:
             cmd += ["--ai-coustics-enhancement-level", str(args.enhancement_level)]
 
+        # noise-canceller.py writes one metrics file per filter. Remove any
+        # left by an earlier run, so a failed job can't be scored with them.
+        metrics_paths = {
+            fk: audio_dir / f"{clip.stem}-{fk.lower()}-processed.metrics.json"
+            for fk in clip_filters
+        }
+        for path in metrics_paths.values():
+            path.unlink(missing_ok=True)
+
         async with semaphore:
             # One retry: jobs can fail transiently (room setup, STT stream).
             for _ in range(2):
@@ -317,9 +336,7 @@ async def cmd_run(args: argparse.Namespace) -> None:
 
         rows = []
         for fk in clip_filters:
-            metrics_path = audio_dir / (
-                f"{clip.stem}-{fk.lower()}-processed.metrics.json"
-            )
+            metrics_path = metrics_paths[fk]
             if not metrics_path.exists():
                 counters["failed"] += 1
                 print(

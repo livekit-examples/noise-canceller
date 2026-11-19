@@ -1373,11 +1373,18 @@ def main():
                 kwargs["model_parameters"] = model_parameters(
                     enhancement_level=args.ai_coustics_enhancement_level
                 )
-            elif not args.silent:
-                console.print(
-                    "⚠️  [yellow]Ignoring --ai-coustics-enhancement-level: installed ai-coustics "
-                    "plugin does not support ModelParameters yet[/yellow]"
+            else:
+                # Fail rather than run at the plugin's default level: results
+                # would otherwise be recorded under a level never applied.
+                message = (
+                    "--ai-coustics-enhancement-level needs an ai-coustics "
+                    "plugin with ModelParameters"
                 )
+                if not args.silent:
+                    console.print(f"❌ [red]{message}[/red]")
+                else:
+                    sys.stderr.write(f"ERROR: {message}\n")
+                sys.exit(1)
 
         return ai_coustics.audio_enhancement(**kwargs)
 
