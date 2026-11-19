@@ -240,6 +240,22 @@ async def cmd_run(args: argparse.Namespace) -> None:
             f"({', '.join(sorted(r or 'unknown' for r in stale))}). "
             "Move it away before running against the pinned revision."
         )
+    # Resuming skips scored (clip, filter) pairs, so every row in the file
+    # must come from the same settings as this run.
+    settings = {
+        "stt_model": args.stt,
+        "sample_rate": args.sample_rate,
+        "direct": args.direct,
+        "enhancement_level": args.enhancement_level,
+    }
+    for key, value in settings.items():
+        other = {row.get(key) for row in existing} - {value}
+        if other:
+            sys.exit(
+                f"{results_path} has rows with {key}="
+                f"{', '.join(sorted(map(str, other)))}, but this run uses "
+                f"{key}={value}. Move it away, or run with the same settings."
+            )
     done = {(row["clip"], row["filter"]) for row in existing}
     todo: list[tuple[Path, list[str]]] = []
     for clip in clips:
@@ -317,6 +333,7 @@ async def cmd_run(args: argparse.Namespace) -> None:
             metrics["suite"] = args.suite
             metrics["dataset_revision"] = revision
             metrics["clip"] = clip.stem
+            metrics["enhancement_level"] = args.enhancement_level
             rows.append(metrics)
             counters["ok"] += 1
 
@@ -387,6 +404,10 @@ def cmd_report(args: argparse.Namespace) -> None:
     suites = sorted({row.get("suite", "?") for row in rows})
     stt_models = sorted({row.get("stt_model", "?") for row in rows})
     revisions = sorted({row.get("dataset_revision") or "unknown" for row in rows})
+    levels = sorted({
+        "default" if row.get("enhancement_level") is None else str(row["enhancement_level"])
+        for row in rows
+    })
     lines = [
         "# WER benchmark report",
         "",
@@ -394,6 +415,7 @@ def cmd_report(args: argparse.Namespace) -> None:
         f"- suite(s): {', '.join(suites)}",
         f"- dataset revision(s): {', '.join(revisions)}",
         f"- STT model(s): {', '.join(stt_models)}",
+        f"- ai-coustics enhancement level(s): {', '.join(levels)}",
         "",
         "WER convention matches noise-canceller.py reports: "
         "(S+I+D) / reference words, punctuation-insensitive, case-insensitive. "
@@ -509,7 +531,8 @@ def main() -> None:
     p_run.add_argument(
         "--enhancement-level",
         type=float,
-        help="forwarded to --ai-coustics-enhancement-level",
+        help="forwarded to --ai-coustics-enhancement-level "
+        "(default: the plugin's default)",
     )
 
     p_report = sub.add_parser("report", help="aggregate a results.jsonl")

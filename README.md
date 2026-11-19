@@ -121,7 +121,9 @@ into a 450-clip benchmark would skew the distribution.
 Each suite is pinned to a Hugging Face commit, and `benchmark_data/<suite>/`
 records the revision it was fetched at. `run` stops if the local data or
 `results.jsonl` comes from a different revision. Delete the data directory to
-fetch the pinned revision, and move the old results away.
+fetch the pinned revision, and move the old results away. `run` also stops if
+`results.jsonl` has rows with a different `--stt`, `--sample-rate`,
+`--direct` or `--enhancement-level`, so a resumed run never mixes settings.
 
 ```bash
 # 1. Run filters over a suite (fetches the dataset automatically on first

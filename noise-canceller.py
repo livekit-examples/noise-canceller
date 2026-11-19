@@ -829,16 +829,24 @@ class AudioFileProcessor:
                         for tid in capture_ids:
                             prog.update(tid, advance=delta)
 
+                # Audio is fed in real time, so allow for its full length.
+                audio_seconds = len(audio_data) / self.sample_rate
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(_feed(), _wait_capture()),
-                        timeout=120.0,
+                        timeout=max(120.0, audio_seconds * 1.5 + 30.0),
                     )
                 except asyncio.TimeoutError:
                     if not self.silent:
                         console.print("⚠️  [yellow]Processing timed out[/yellow]")
 
             self.processed_frames = capturing.frames
+            # A partial capture would be scored as if the missing audio were
+            # silence, turning every word in it into a deletion.
+            if len(capturing.frames) < chunk_count:
+                raise RuntimeError(
+                    f"captured {len(capturing.frames)} of {chunk_count} processed frames"
+                )
             logger.info("Successfully processed %d frames", len(self.processed_frames))
 
         except Exception as e:
@@ -1164,11 +1172,11 @@ def main():
   uv run noise-canceller.py song.flac --filter BVC
   uv run noise-canceller.py audio.m4a --filter WebRTC
   uv run noise-canceller.py audio.m4a --filter aic-quail-l
-  uv run noise-canceller.py audio.m4a --filter aic-quail-vfl --enhancement-level 0.8
+  uv run noise-canceller.py audio.m4a --filter aic-quail-vfl --ai-coustics-enhancement-level 0.8
   uv run noise-canceller.py audio.m4a --filter all
   uv run noise-canceller.py audio.m4a -o processed.wav --silent
   uv run noise-canceller.py input.wav -t ground_truth.txt
-  uv run noise-canceller.py input.wav -t ground_truth.txt --stt-model deepgram/nova-3:en
+  uv run noise-canceller.py input.wav -t ground_truth.txt --stt deepgram/nova-3:en
   
 📁 Supported formats: MP3, WAV, FLAC, OGG, M4A, AAC, AIFF, and more
 📝 Note: Some formats may require ffmpeg to be installed
@@ -1348,10 +1356,10 @@ def main():
     ):
         if not args.silent:
             console.print(
-                "❌ [red]--enhancement-level must be between 0.0 and 1.0[/red]"
+                "❌ [red]--ai-coustics-enhancement-level must be between 0.0 and 1.0[/red]"
             )
         else:
-            sys.stderr.write("ERROR: --enhancement-level must be between 0.0 and 1.0\n")
+            sys.stderr.write("ERROR: --ai-coustics-enhancement-level must be between 0.0 and 1.0\n")
         sys.exit(1)
 
     def build_ai_coustics_filter(model: EnhancerModel):
@@ -1367,7 +1375,7 @@ def main():
                 )
             elif not args.silent:
                 console.print(
-                    "⚠️  [yellow]Ignoring --enhancement-level: installed ai-coustics "
+                    "⚠️  [yellow]Ignoring --ai-coustics-enhancement-level: installed ai-coustics "
                     "plugin does not support ModelParameters yet[/yellow]"
                 )
 
